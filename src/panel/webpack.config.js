@@ -1,8 +1,13 @@
 const webpack = require('webpack');
+// import webpack from "./webpack"
 const glob = require('glob');
+// import glob from "./glob"
 const path = require('path');
+// import path from "./path"
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
+// import MiniCssExtractPlugin from "./mini-css-extract-plugin"
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+//import HtmlWebpackPlugin from "./html-webpack-plugin"
 
 module.exports = function(env, argv) {
     if (env === undefined) {

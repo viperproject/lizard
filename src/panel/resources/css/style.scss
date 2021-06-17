@@ -2,10 +2,11 @@
 body {
     padding: 0;
     margin: 0;
-    display: flex;
-    flex-direction: column;
+    display: block;
+    // flex-direction: column;
     height: 100vh;
     background-color: #222;
+    color: #fff;
 }
 
 header {
@@ -56,7 +57,7 @@ nav {
 
 #toggleExecutionRecords {
     margin-left: 0.5em;
-    color: #444444;
+    //color: #444444;
     font-weight: normal;
 }
 
@@ -72,7 +73,7 @@ nav {
     cursor: pointer;
     text-decoration: underline;
 }
-
+/*
 #navigation {
     ul {
         list-style: none;
@@ -110,7 +111,7 @@ nav {
         // }
     }
     .childrenNumber {
-        color: #444444;
+        //color: #444444;
         margin-left: 1em;
     }
 }
@@ -145,7 +146,7 @@ nav {
             border-radius: 2px;
         }
     }
-}
+}*/
 
 pre.json {
     padding: 1em;
@@ -154,7 +155,7 @@ pre.json {
 
 #graphPanel {
     background: #111111;
-    display: flex;
+    display: block;
     justify-content: center;
     align-items: center;
 }
@@ -173,7 +174,7 @@ pre.json {
 div.graphMessage {
     margin: auto;
     font-size: 5vh;
-    color: #444444;
+    //color: #444444;
 }
 
 .panel {
@@ -204,11 +205,11 @@ h3 {
  }
 
  #diagnostics > section {
-   background: #1e1e1e; 
+   //background: #1e1e1e; 
    padding: 1em;
 
-   > *:first-child { margin-top: 0; }
-   > *:last-child { margin-bottom: 0; }
+//    > *:first-child { margin-top: 0; }
+//    > *:last-child { margin-bottom: 0; }
  }
  .hide {
      display: none;
