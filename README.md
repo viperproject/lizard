@@ -1,13 +1,17 @@
-This Visual Studio Code extension provides interactive IDE features for verifying programs in [Viper](http://viper.ethz.ch) (Verification Infrastructure for Permission-based Reasoning). 
+# Viper Debugger
 
-The extension automatically downloads and (if you give permission) installs them under the defauls directory /usr/local/Viper; please **always** refer to the official [installation instructiuons](http://viper.ethz.ch/downlo…) for more details (in particular, about defferent operation system support). 
+This is the proof of concept debugger for the Silicon verification backend.
+The debugger requires the laster version of the [backend tools][backends].
 
-### Using Viper ###
+For the debugger to work, the Silicon backend must be configured in the main
+extension with the '--ideModeAdvanced' and the '--numberOfParallelVerifiers 1'
+options. 
 
-If you would like to learn more about Viper, please start with our extensive [tutorial](http://viper.ethz.ch/tutorial/). 
+The project can be build by using the `npm run compile` command, which will
+compile the debugger and the panel. `npm run compile-all` can be used to compile
+the debugger, the panel, the client, and the server. Compiling just the panel is
+possible via `npm run build-ui`.
 
-### Viper IDE dependencies status ###
-
-[![Build Status](https://pmbuilds.inf.ethz.ch/buildStatus/icon?job=Viper%20IDE%20binary%20dependencies)](https://pmbuilds.inf.ethz.ch/job/Viper%20IDE%20binary%20dependencies)
-
-Download the dependencies here: http://viper.ethz.ch/downloads/
+The debugger can be run from within Visual Studio Code with the
+"Extension + Debugger" task, which runs both the debugger and the main
+extension, from the currently compiled sources. 
