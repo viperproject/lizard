@@ -97,10 +97,11 @@ export class Node {
                 public val: string,                  // e.g. "$Ref!val!0"
                 public proto: string | undefined = undefined) { // e.g. "X"
     
+        let readable_name = proto ? proto : (Array.isArray(name) ? `e.g.${name[0]}` : name)
         if (type) {
-            this._ = `${proto}: ${type.typename} = ${val}`
+            this._ = `${readable_name}: ${type.typename} = ${val}`
         } else {
-            this._ = `${proto} = ${val}`
+            this._ = `${readable_name} = ${val}`
         }
     }  
 }

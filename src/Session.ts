@@ -1,19 +1,7 @@
 import { Logger } from "./logger"
 import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry,  } from "./Models"
-
-export interface ViperLocation {
-    start: string
-    end: string
-    file: string
-}
-
-export interface ViperDefinition {
-    name: string
-    location: ViperLocation
-    scopeStart: ViperLocation | "global"
-    scopeEnd: ViperLocation | "global"
-    type: { name: string, viperType: { kind: string, typename: any, isConcrete?: boolean } }
-}
+import { ViperDefinition, ViperLocation } from "./ViperAST"
+import { ViperTypesProvider } from "./ViperTypesExtractor"
 
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
@@ -24,7 +12,10 @@ export class Session {
     }
     public isCarbon(): boolean {
         return this.backend.includes('carbon')
-    }   
+    }
+
+    private viperTypes: ViperTypesProvider | undefined = undefined
+    
     constructor(public backend: string, 
                 private __next_node_id = 0) {}
 
@@ -36,7 +27,7 @@ export class Session {
 
     private mkNode(name: string, innerval: string, proto: string | undefined = undefined): Node {
         // Internal nodes might be of unknown type
-        let typ: ViperType | undefined = this.viper_type!(name)
+        let typ = this.viperTypes!.get(name)
         return new Node(name, typ, this.freshNodeId(), innerval, proto)
     }
 
@@ -99,8 +90,11 @@ export class Session {
     private graphModel: GraphModel | undefined = undefined
 
     public preProcessRawModel(): void {
-        // 0. Collect types
-        this.precomputeTypes()
+        // 0. Collect type information
+        this.viperTypes = new ViperTypesProvider(this.programDefinitions!, 
+            // e.g. "X@1" is an inner name for the prototype "X"
+            (innername: string) => this.innerToProto(this.isCarbon(), innername))  
+        this.precomputeViperTypesFromModel()
 
         // 1. Collect program states 
         this.states = this.collectStates()
@@ -407,149 +401,65 @@ export class Session {
             return undefined
         }
     }
-
-    // PRECOMPUTE
-    private viper_type: ((nodename: string) => ViperType) | undefined = undefined 
-    private carbon_type: ((value: string) => ViperType) | undefined = undefined
-    private silicon_type: ((value: string) => ViperType) | undefined = undefined
-
-    private static serializeConcreteViperTypeRec: (typ: any) => string = (typ: any) => {
-        if (typ.kind === 'atomic') {
-            return typ.typename
-        } else if (typ.hasOwnProperty('collection')) {
-            let collection = typ.collection
-            if (collection === 'Set' || collection === 'Seq' || collection === 'MultiSet') {
-                let elem_type: string = Session.serializeConcreteViperTypeRec(typ.elements)
-                return `${collection}[${elem_type}]`
-
-            } else if (collection == 'Map') {
-                let keys_type: string = Session.serializeConcreteViperTypeRec(typ.keys)
-                let values_type: string = Session.serializeConcreteViperTypeRec(typ.values)
-                return `Map[${keys_type},${values_type}]`
-            } else {
-                let type_args: Array<string> = typ.typeParams.map((t: any) => Session.serializeConcreteViperTypeRec(t))
-                return `${collection}[${type_args.join(',')}]`
-            }
+    
+    private innerToProto(is_carbon: boolean, inner_name: string): string {
+        if (is_carbon) {
+            return inner_name
         } else {
-            throw `serialization of type ${typ} is not supported`
+            let m = inner_name.match(/(.*)@\d+@\d+/)
+            if (m && m[1]) {
+                return m[1]
+            } else {
+                return inner_name
+            }
         }
     }
 
-    private precomputeTypes() {
+    // PRECOMPUTE
 
-        // Type information from Viper
+    private carbon_type: ((value: string) => ViperType) | undefined = undefined
+    private silicon_type: ((value: string) => ViperType) | undefined = undefined
 
-        let viper_type_map = new Map<string, ViperType>()    // for mapping values to types
-        let viper_type_cache = new Map<string, ViperType>()  // for reusing the types whenever possible
-
-        let viper_Bool_type = new BoolType();                viper_type_cache.set('Bool', viper_Bool_type)
-        let viper_Int_type  = new IntType();                 viper_type_cache.set('Int', viper_Int_type)
-        let viper_Ref_type  = new RefType();                 viper_type_cache.set('Ref', viper_Ref_type)
-        let viper_Perm_type = new PermType();                viper_type_cache.set('Perm', viper_Perm_type)
-        let viper_Wand_type = new OtherType('Wand');         viper_type_cache.set('Wand', viper_Wand_type)
-        let viper_Internal_type = new OtherType('Internal'); viper_type_cache.set('Internal', viper_Internal_type)
-
-        let strToType = (strRepr: string) => {
-            if (viper_type_cache.has(strRepr)) {
-                return viper_type_cache.get(strRepr)!
-            } else {
-                let new_type: ViperType
-                if (strRepr === 'Set[Ref]') {
-                    new_type = new SetType(undefined, viper_Ref_type)
-                } else {
-                    // TODO: track types more precisely
-                    new_type = new OtherType(strRepr)
-                }
-                viper_type_cache.set(strRepr, new_type)
-                return new_type
-            }
-        }
-
-        
-        // let viper_SetOfRefs_type = new SetType(undefined, viper_Ref_type)
-        // viper_type_cache.set('Set[Ref]', viper_SetOfRefs_type)
-
-        // Collect things that should be statically typed
-        let typed_definitions = this.programDefinitions!.filter(def => def.type.hasOwnProperty('viperType'))
-        
-        // Map typed things to types
-        typed_definitions.forEach(typed_def => {
-            let thing = typed_def.name
-            let vipertype = typed_def.type.viperType
-            let typename: string
-
-            if (vipertype.kind === 'atomic') {
-                // Atomic types are normally already cached, unless it is backend-specific
-                if (vipertype.typename.hasOwnProperty('smtName')) {
-                    // The rare case
-                    typename = <string> vipertype.typename.smtName
-                } else {
-                    // The normal case
-                    typename = <string> vipertype.typename
-                }     
-            } else if (vipertype.kind === 'generic') {
-                // Generic types can be concrete of with (partially-) instantiated type perameters. 
-                if (vipertype.isConcrete) {
-                    // This must be a collection (Seq[T], Set[T], Map[T,S], $CustomType[A,B,C,...])
-                    typename = Session.serializeConcreteViperTypeRec(vipertype.typename)
-                } else {
-                    // Non-concrete collection types are pre-serialized
-                    typename = vipertype.typename
-                }
-            } else if (vipertype.kind === 'extension') {
-                // Extension types are pre-serialized for now 
-                // (See ViperServer viper/server/frontends/http/jsonWriters/ViperIDEProtocol.scala)
-                typename = vipertype.typename
-            } else {
-                // TODO: generalize to arbitrary types
-                typename = vipertype.typename
-            }
-
-            let typ = strToType(typename)
-            viper_type_map.set(thing, typ)
-        })
-
-        this.viper_type = (nodename: string) => {
-            let typed_thing: string
-            if (this.isCarbon()) {
-                typed_thing = nodename
-            } else {
-                let m = nodename.match(/(.*)@\d+@\d+/)
-                if (m && m[1]) {
-                    typed_thing = m[1]
-                } else {
-                    typed_thing = nodename
-                }
-            }
-            return viper_type_map.get(typed_thing)!
-        }
-
-        // Type informtion from the SMT model
-        if (this.isCarbon()) {
-            let carbon_type_map = new Map<string, ViperType>()
+    private precomputeViperTypesFromCarbonModel() {
+        let carbon_type_map = new Map<string, ViperType>()
             
-            // Refs
-            let ref_type_val = getConstantEntryValue(this.model!.RefType)
-            carbon_type_map.set(ref_type_val, new RefType(ref_type_val))
-            
-            // Bools
-            let bool_type_val = getConstantEntryValue(this.model!.boolType)
-            carbon_type_map.set(bool_type_val, new BoolType(bool_type_val))
-
-            // Ints
-            let int_type_val = getConstantEntryValue(this.model!.intType)
-            carbon_type_map.set(int_type_val, new IntType(int_type_val))
-
-            // Perms
-            let perm_type_val = getConstantEntryValue(this.model!.permType)
-            carbon_type_map.set(perm_type_val, new PermType(perm_type_val))
-
-            // Sets
-            let map_type_entries = this.getEntriesViaRegExp(/MapType\d+Type/)  // FIXME
-            // map_type_entries.map(map_type_entry => {})
-            // let set_of_refs_type_val = this.appleEntry(this.model!.)
-
-            this.carbon_type = (value: string) => {
+        // Refs
+        let ref_type_val = getConstantEntryValue(this.model!.RefType)
+        carbon_type_map.set(ref_type_val, new RefType(ref_type_val))
+        
+        // Bools
+        let bool_type_val = getConstantEntryValue(this.model!.boolType)
+        carbon_type_map.set(bool_type_val, new BoolType(bool_type_val))
+    
+        // Ints
+        let int_type_val = getConstantEntryValue(this.model!.intType)
+        carbon_type_map.set(int_type_val, new IntType(int_type_val))
+    
+        // Perms are represented as doubles
+        let float_type_val = 'Float'
+        carbon_type_map.set(float_type_val, new PermType())
+    
+        // Sets
+        let map_type_entries = this.getEntriesViaRegExp(/MapType\d+Type/)  // FIXME
+        // map_type_entries.map(map_type_entry => {})
+        // let set_of_refs_type_val = this.appleEntry(this.model!.)
+    
+        this.carbon_type = (value: string) => {
+            let int_rep = parseInt(value)
+            let float_rep = parseInt(value)
+            if (float_rep === float_rep) {
+                // value is a number; is it an int or a float? 
+                if (float_rep === int_rep) {
+                    // this is an int (we must have it in the cache)
+                    let typ = carbon_type_map.get(int_type_val)!
+                    return typ
+                } else {
+                    // this is a float; create a new type instance for each float
+                    let typ = carbon_type_map.get(float_type_val)!
+                    return typ
+                }
+            } else {
+                // value is not a number
                 if (carbon_type_map.has(value)) {
                     let typ = carbon_type_map.get(value)!
                     return typ
@@ -559,62 +469,72 @@ export class Session {
                     return new_type
                 }
             }
-
-        } else {
-            // FIXME: default types are never cached
-
-            let silicon_type_cache = new Map<string, ViperType>()
-
-            let viper_Bool_type = new BoolType()
-            silicon_type_cache.set("true", viper_Bool_type)
-            silicon_type_cache.set("false", viper_Bool_type)
-            
-            silicon_type_cache.set("$Snap.unit", new OtherType("$Snap.unit"))
-
-            let viper_Int_type = new IntType()
-            let viper_Ref_type = new RefType()
-            let viper_Perm_type = new PermType()
-
-            silicon_type_cache.set("$Ref", viper_Ref_type)
-            silicon_type_cache.set("Set<$Ref>", new SetType(undefined, viper_Ref_type))
-
-            this.silicon_type = (value: string) => {
-                if (silicon_type_cache.has(value)) {
-                    let typ = silicon_type_cache.get(value)!
-                    return typ
-                } else {
-                    let int_rep = parseInt(value)
-                    let float_rep = parseInt(value)
-                    if (float_rep !== float_rep) {
-                        // Non-numeric value (uninterpreted)
-                        let m = value.match(/(.*)!val!\d+/)
-                        
-                        if (!m || !m[1]) {
-                            throw `cannot deduce value type for '${value}'`
-                        }
-                        let typename = m[1]
-                        if (silicon_type_cache.has(typename)) {
-                            return silicon_type_cache.get(typename)!
-                        } else {
-                            let new_type = new OtherType(typename)
-                            silicon_type_cache.set(typename, new_type)
-                            return new_type
-                        }
-                        
-                    } else if (int_rep === float_rep) {
-                        // Integer value
-                        silicon_type_cache.set(value, viper_Int_type)
-                        return viper_Int_type
-                        
-                    } else {
-                        // Floating point value (permission amount)
-                        silicon_type_cache.set(value, viper_Perm_type)
-                        return viper_Perm_type
+        }
+    }
+    
+    private precomputeViperTypesFromSiliconModel() {
+        // FIXME: default types are never cached
+    
+        let silicon_type_cache = new Map<string, ViperType>()
+    
+        let viper_Bool_type = new BoolType()
+        silicon_type_cache.set("true", viper_Bool_type)
+        silicon_type_cache.set("false", viper_Bool_type)
+    
+        silicon_type_cache.set("$Snap.unit", new OtherType("$Snap.unit"))
+    
+        let viper_Int_type = new IntType()
+        let viper_Ref_type = new RefType()
+        let viper_Perm_type = new PermType()
+    
+        silicon_type_cache.set("$Ref", viper_Ref_type)
+        silicon_type_cache.set("Set<$Ref>", new SetType(undefined, viper_Ref_type))
+    
+        this.silicon_type = (value: string) => {
+            if (silicon_type_cache.has(value)) {
+                let typ = silicon_type_cache.get(value)!
+                return typ
+            } else {
+                let int_rep = parseInt(value)
+                let float_rep = parseInt(value)
+                if (float_rep !== float_rep) {
+                    // Non-numeric value (uninterpreted)
+                    let m = value.match(/(.*)!val!\d+/)
+                    
+                    if (!m || !m[1]) {
+                        throw `cannot deduce value type for '${value}'`
                     }
+                    let typename = m[1]
+                    if (silicon_type_cache.has(typename)) {
+                        return silicon_type_cache.get(typename)!
+                    } else {
+                        let new_type = new OtherType(typename)
+                        silicon_type_cache.set(typename, new_type)
+                        return new_type
+                    }
+                    
+                } else if (int_rep === float_rep) {
+                    // Integer value
+                    silicon_type_cache.set(value, viper_Int_type)
+                    return viper_Int_type
+                    
+                } else {
+                    // Floating point value (permission amount)
+                    silicon_type_cache.set(value, viper_Perm_type)
+                    return viper_Perm_type
                 }
             }
         }
     }
+    
+    private precomputeViperTypesFromModel() {
+        // Type informtion from the SMT model
+        if (this.isCarbon()) {
+            this.precomputeViperTypesFromCarbonModel()
+        } else {
+            this.precomputeViperTypesFromSiliconModel()
+        }
+    }    
 
     private getInnerValueType(innerval: string): ViperType {
         if (this.isCarbon()) {
