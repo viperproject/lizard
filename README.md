@@ -1,70 +1,25 @@
-# lizard README
+# Lizard: the Viper debugger
+Lizard is a VS Code extension and an experimental visual debugger for the Viper intermediate verification language. It works with both Viper's backends (Silicon as well as Carbon), although not all Viper language features might work correctly. Hence, Lizard requires the Viper VS Code extension to be installed. Verification errors reported by Viper trigger Lizard to produce comprehensible counterexamples to failed assertions, postconditions, or invariants. 
+Lizard displays the counterexample _next to_ the Viper program that failed to verify. 
 
-This is the README for your extension "lizard". After writing up a brief description, we recommend including the following sections.
+# Core use case
+Lizard's main purpose is debugging (unbounded) heap-manipulating Viper programs that are specified in terms of quantifier permissions (a.k.a. iterated separating conjunction). Lizard is especially useful in combination with Chuckwalla (Viper's prototypical extension for heap-reachability verification). However, it may be that at this time Chuckwalla is not yet implemented. 
 
-## Features
+# How it works
+To generate a counterexample, Lizard combines the available type information with the information from the SMT model (normally produced by Z3 in an incomplete yet incomprehensible manner). Visualization is further facilitated by some preexpectation for the _shape_ of possible counterexamples. For example, it is expected that each method's footprint is represented as a set of references to the nodes, the fields of which may be accessed by the method. 
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+# Other use cases
+Lizard might be useful also as a platform for prototyping other Viper debuggers, providing an API for querying SMT models from within Viper IDE. Lizard is written in TypeScript and uses things like Graphviz, Node.js, Webpack, WebView, HTML, CSS, and prayer. 
 
-For example if there is an image subfolder under your extension project workspace:
+# For developers
 
-\!\[feature X\]\(images/feature-x.png\)
+To compile the project: 
+1. clone the repo
+2. run ```npm install``` to install the dependencies 
+3. run ```npm run compile``` to build the extension 
+4. run ```code lizard/``` to open the project in VS Code 
+5. start the extension from the debug panel in VS Code 
+6. run ```vsce package``` to assemble a portable distribution bundle
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
-
-## Requirements
-
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: enable/disable this extension
-* `myExtension.thing`: set to `blah` to do something
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
------------------------------------------------------------------------------------------------------------
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-**Note:** You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+CMD+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux) or `Cmd+Space` (macOS) to see a list of Markdown snippets
-
-### For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+# Historical note
+This extension is a follow-up project to the family of verification debugger prototypes developed as student projects at the Programming Methodology Group at ETH Zurich. In particular, some code is borrowed from Alessio Aurrechia's Master thesis project (which used symbolic execution traces and Alloy models, as opposed to Z3 models, to extract possible counterexamples). 
