@@ -91,13 +91,13 @@ export class OtherType implements ViperType {
 
 export class Node {
     private _: string
-    constructor(public name: string | Array<string>, // e.g. "X@7@12" or ["$FOOTPRINT@0@12", "$FOOTPRINT@1@12"]
-                public type: ViperType | undefined,  // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
-                public id: number,                   // 0, 1, 2, ...
-                public val: string,                  // e.g. "$Ref!val!0"
+    constructor(public aliases: string | Array<string>, // e.g. "X@7@12" or ["$FOOTPRINT@0@12", "$FOOTPRINT@1@12"]
+                public type: ViperType | undefined,     // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
+                public id: number,                      // 0, 1, 2, ...
+                public val: string,                     // e.g. "$Ref!val!0"
                 public proto: string | undefined = undefined) { // e.g. "X"
     
-        let readable_name = proto ? proto : (Array.isArray(name) ? `e.g.${name[0]}` : name)
+        let readable_name = proto ? proto : (Array.isArray(aliases) ? `e.g.${aliases[0]}` : aliases)
         if (type) {
             this._ = `${readable_name}: ${type.typename} = ${val}`
         } else {
@@ -119,7 +119,7 @@ export class Relation {
                 public pred: Node, 
                 public succ: Node) {
     
-        this._ = `${name}[ ${state} ](${pred.name}, ${succ.name})`
+        this._ = `${name}[ ${state} ](${pred.aliases}, ${succ.aliases})`
     }
 }
 

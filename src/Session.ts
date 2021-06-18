@@ -37,10 +37,10 @@ export class Session {
      *  This is useful in aliasing resolution. 
      */
     private copyVectorizeNode(node: Node): Node {
-        if (Array.isArray(node.name)) {
+        if (Array.isArray(node.aliases)) {
             throw `cannot vectorize a node the 'name' field of which is already an array`
         }
-        return new Node(new Array(node.name), node.type, this.freshNodeId(), node.val, node.proto)
+        return new Node(new Array(node.aliases), node.type, this.freshNodeId(), node.val, node.proto)
     } 
 
     static myRelations = ['[2]', '[3]', '[4:=]', 
@@ -138,7 +138,7 @@ export class Session {
         // Find atoms that define graph nodes
         let nodes = names.flatMap(proto => 
             this.atoms!.filter(atom => {
-                let atom_name = atom.name
+                let atom_name = atom.aliases
                 if (Array.isArray(atom_name)) {
                     throw `each node shoudl have one internal name at this point`
                 }
@@ -152,7 +152,10 @@ export class Session {
         // Check that all expected nodes are defined in each state
         if (nodes.length < names.length) {
             Logger.warn(`could not find definitions for some graph nodes in raw model`)
-        }        
+        }
+
+        // Filter old versions of variables in case the encoding uses SSA
+        nodes = this.extractLatestAssignedVars(nodes)
 
         return nodes
     }
@@ -165,13 +168,13 @@ export class Session {
             if (nonAliasingNodesMap.has(innerval)) {
                 // We already have a representative for this node inner value
                 let na_node = nonAliasingNodesMap.get(innerval)!
-                if (!Array.isArray(na_node.name)) {
+                if (!Array.isArray(na_node.aliases)) {
                     throw `expected type Array for field 'name' of a (non-aliasing) Node object`
                 }
-                if (Array.isArray(node.name)) {
+                if (Array.isArray(node.aliases)) {
                     throw `potentially-aliasing nodes are expected to have only one (scalar) internal name`
                 }
-                na_node.name.push(node.name)
+                na_node.aliases.push(node.aliases)
             } else {
                 // Need to create a new representative node
                 let new_node = this.copyVectorizeNode(node)
@@ -218,7 +221,6 @@ export class Session {
         let fields = this.collectFields(nonAliasingNodes.filter(node => node.type && node.type.typename === 'Ref'))
         
         let graph = new Graph('G', nonAliasingNodes.map(n => n.id))
-        
         
         // TODO: edges, paths
         this.graphModel = new GraphModel(graph, nonAliasingNodes, fields, [], [], equivalence_classes)  
@@ -290,13 +292,13 @@ export class Session {
             if (this.extended_equiv_classes!.hasOwnProperty(succ_innerval)) {
                 let succs = this.extended_equiv_classes![succ_innerval]
                 if (succs.length > 1) {
-                    Logger.warn(`multiple values are possible for ${node.name}.${fname}; ` + 
+                    Logger.warn(`multiple values are possible for ${node.aliases}.${fname}; ` + 
                                 `perhaps there are multiple program states involved?`)
                 }
                 succ = succs[0]
             } else {
                 // this is a fresh value; create a new atom to support it
-                let name = `${node.name}.${fname}`
+                let name = `${node.aliases}.${fname}`
                 Logger.warn(`no atom found for value ${succ_innerval} of ${name} in state ${state}`)
                 succ = this.mkNode(name, succ_innerval)
                 this.extended_equiv_classes![succ_innerval] = new Array<Node>(succ)
@@ -411,17 +413,31 @@ export class Session {
             return undefined
         }
     }
+
+    private siliconInnerNameParser(inner_name: string): 
+        { proto: string, suffix?: number, index?: number } {
+
+        let m2 = inner_name.match(/(.*)@(\d+)@(\d+)/)
+        if (m2 && m2[1] && m2[2] && m2[3]) {
+            return { proto: m2[1], suffix: parseInt(m2[2]), index: parseInt(m2[3]) }
+        }
+        let m1 = inner_name.match(/(.*)@(\d+)/)
+        if (m1 && m1[1] && m1[2]) {
+            return { proto: m1[1], index: parseInt(m1[2]) }
+        }
+        return { proto: inner_name }
+    }
+
+    private siliconInnerToProto(inner_name: string): string {
+        let inner_name_struct = this.siliconInnerNameParser(inner_name)
+        return inner_name_struct.proto
+    }
     
     private innerToProto(is_carbon: boolean, inner_name: string): string {
         if (is_carbon) {
             return inner_name
         } else {
-            let m = inner_name.match(/(.*)@\d+@\d+/)
-            if (m && m[1]) {
-                return m[1]
-            } else {
-                return inner_name
-            }
+            return this.siliconInnerToProto(inner_name)
         }
     }
 
@@ -559,6 +575,48 @@ export class Session {
             }
         } else {
             return this.silicon_type!(innerval)
+        }
+    }
+
+    /* We are interested in verifying the failed assertion --- 
+    *   a property of the last reachable state in the trace. 
+    *  Since Silicon uses the SSA form, we need to keep only only 
+    *   the latest version of each variable in the counterexample. 
+    *  e.g. "X@1", "X@2", "X@3" --> "X@3"
+    */ 
+    private extractLatestAssignedVars(nodes: Array<Node>): Array<Node> {
+        if (this.isCarbon()) {
+            return nodes
+        } else {
+            let ssa_map = new Map<string, [number, Node]>()
+            let immutable_things = new Array<Node>()
+
+            nodes.forEach(node => {
+                let name = node.aliases
+                if (Array.isArray(name)) {
+                    throw `at this point, each node is expected to have only one (skalar) name`
+                }
+                let name_struct = this.siliconInnerNameParser(name)
+                let proto = name_struct.proto
+                let index = name_struct.index
+                if (index === undefined) {
+                    // No index --- that means this is an immutable thing and we should keep it. 
+                    //  e.g. "s@$"
+                    immutable_things.push(node)
+                } else {
+                    // Maximize the index for each prototype
+                    if (ssa_map.has(proto)) {
+                        let max_index_so_far = ssa_map.get(proto)![0]
+                        if (max_index_so_far < index) {
+                            ssa_map.set(proto, [index, node])
+                        } 
+                    } else {
+                        ssa_map.set(proto, [index, node])
+                    }
+                }
+            })
+
+            return Array.from(ssa_map.values()).map(pair => pair[1]).concat(immutable_things)
         }
     }
 }
