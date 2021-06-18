@@ -1,8 +1,5 @@
-import { Func } from "mocha"
-import { type } from "os"
-import { stringify } from "querystring"
-import { FunctionBreakpoint } from "vscode"
 import { Logger } from "./logger"
+import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry,  } from "./Models"
 
 export interface ViperLocation {
     start: string
@@ -18,168 +15,6 @@ export interface ViperDefinition {
     type: { name: string, viperType: { kind: string, typename: any, isConcrete?: boolean } }
 }
 
-export interface ModelEntry {
-    type: string
-}
-
-export class ConstantEntry implements ModelEntry {
-    type = 'constant_entry'
-    value: string
-    constructor(v: string) {
-        this.value = v
-    }
-}
-
-export function getConstantEntryValue(entry: ModelEntry): string {
-    if (entry.type !== 'constant_entry') {
-        throw `expected entry of type 'constant_entry'; got '${entry.type}'`
-    }
-    return (<ConstantEntry> entry).value
-}
-
-export interface FunctionValue {
-    args: Array<ModelEntry>
-    name: string
-}
-
-export class ApplicationEntry implements ModelEntry {
-    type = 'application_entry'
-    value: FunctionValue
-    constructor(value: FunctionValue) {
-        this.value = value
-    }
-}
-
-export interface ModelCase {
-    args: Array<ModelEntry>
-    value: ModelEntry
-}
-
-export class MapEntry implements ModelEntry {
-    type = 'map_entry'
-    cases: Array<ModelCase>  
-    default: ModelEntry
-    constructor(cs: Array<ModelCase>, df: ModelEntry) {
-        this.cases = cs
-        this.default = df
-    }
-}
-
-// class FieldMapCase implements ModelCase {
-//     constructor(public state: ModelEntry,
-//                 public reciever: ModelEntry, 
-//                 public ) {
-//         args
-//     }
-// }
-
-// class FieldMapEntry extends MapEntry {
-    
-//     constructor()
-// }
-
-// class PartialResult {
-//     [Key: string]: 
-// }
-
-// class PartialMapApplication {
-    
-//     private value: string | PartialResult
-
-//     constructor(public m_entry: MapEntry, 
-//                 public partial_args: Array<string>) {}
-    
-//     public get() {
-//         return this.value
-//     }
-// }
-
-export interface Model {
-    [Key: string]: ModelEntry
-}
-
-export interface ViperType {
-    typename: string
-    innerval: string | undefined
-}
-
-export class RefType implements ViperType {
-    typename = "Ref"
-    constructor(public innerval: string | undefined = undefined) {}
-}
-
-export class IntType implements ViperType {
-    typename = "Int"
-    constructor(public innerval: string | undefined = undefined) {}
-}
-
-export class BoolType implements ViperType {
-    typename = "Bool"
-    constructor(public innerval: string | undefined = undefined) {}
-}
-
-export class PermType implements ViperType {
-    typename = "Perm"
-    constructor(public innerval: string | undefined = undefined) {}
-}
-
-export class SetType implements ViperType {
-    typename: string
-    constructor(public innerval: string | undefined = undefined, 
-                public type_arg: ViperType) {
-        this.typename = `Set[${type_arg.typename}]`
-    }
-}
-
-export class OtherType implements ViperType {
-    typename = "Other"
-    constructor(public innerval: string | undefined = undefined) {}
-}
-
-// TODO: support other types e.g. Maps, Multisets, etc. 
-
-export class Node {
-    constructor(public name: string,                // e.g. "X@7@12"
-                public type: ViperType | undefined, // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
-                public id: number,                  // 0, 1, 2, ...
-                public val: string,                 // e.g. "$Ref!val!0"
-                public proto: string | undefined = undefined) {}  // e.g. "X"
-}
-
-export class Graph {
-    constructor(public name: string, 
-                //public state: string, 
-                public node_ids: Array<number>) {}
-}
-
-// class StatefulGraph extends Graph {
-//     constructor(public name: string,
-//                 public )
-// }
-
-export class Relation {
-    constructor(public name: string,        // e.g. "NEXT", "edge", or "exists_path"
-                public state: string,       // Heap@@1
-                public pred: Node, 
-                public succ: Node) {}
-}
-
-export class GraphModel {
-    constructor(
-        public graph: Graph,
-        public nodes: Array<Node>,
-
-        public fields: Array<Relation>,
-        public edges: Array<Relation>,
-        public paths: Array<Relation>,
-
-        public equivalence_classes: EquivClasses) {}
-}
-
-class EquivClasses {
-    [Key: string]: Array<Node>   // mapping inner values to nodes
-}
-
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
     public model: Model | undefined = undefined
@@ -189,7 +24,7 @@ export class Session {
     }
     public isCarbon(): boolean {
         return this.backend.includes('carbon')
-    }    
+    }   
     constructor(public backend: string, 
                 private __next_node_id = 0) {}
 
@@ -323,7 +158,7 @@ export class Session {
 
     public produceGraphModel(): GraphModel {
         let nodes = this.collectGraphNodes()
-        let fields = this.collectFields(nodes)
+        let fields = this.collectFields(nodes.filter(node => node.type && node.type.typename === 'Ref'))
         
         let graph = new Graph('G', nodes.map(n => n.id))
         
