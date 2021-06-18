@@ -40,6 +40,18 @@ export class Session {
         return new Node(name, typ, this.freshNodeId(), innerval, proto)
     }
 
+    /** Creates and returnes a new node the fields of which are identical to the given node, except: 
+     *  (1) the 'name' field is set to a singleton array containing the name
+     *  (2) the 'id' field is picked freshly
+     *  This is useful in aliasing resolution. 
+     */
+    private copyVectorizeNode(node: Node): Node {
+        if (Array.isArray(node.name)) {
+            throw `cannot vectorize a node the 'name' field of which is already an array`
+        }
+        return new Node(new Array(node.name), node.type, this.freshNodeId(), node.val, node.proto)
+    } 
+
     static myRelations = ['[2]', '[3]', '[4:=]', 
                           'exists_path_', 'exists_path', 
                           'edge_', 'edge', '$$', '$$\'']
@@ -130,14 +142,50 @@ export class Session {
                     .concat(this.nullNodeName())
 
         // Find atoms that define graph nodes
-        let graph_nodes = names.flatMap(proto => this.atoms!.filter(atom => atom.name.startsWith(proto)))
+        let nodes = names.flatMap(proto => 
+            this.atoms!.filter(atom => {
+                let atom_name = atom.name
+                if (Array.isArray(atom_name)) {
+                    throw `each node shoudl have one internal name at this point`
+                }
+                return atom_name.startsWith(proto)
+            }).map(atom => {
+                    // Set the prototype variable for this atom
+                    atom.proto = proto
+                    return atom
+                }))
 
         // Check that all expected nodes are defined in each state
-        if (graph_nodes.length < names.length) {
+        if (nodes.length < names.length) {
             Logger.warn(`could not find definitions for some graph nodes in raw model`)
-        }
+        }        
 
-        return graph_nodes
+        return nodes
+    }
+
+    private mergeAliases(nodes: Array<Node>): Array<Node> {
+        let nonAliasingNodesMap = new Map<string, Node>()  // map from inner values to nodes
+
+        nodes.forEach(node => {
+            let innerval = node.val
+            if (nonAliasingNodesMap.has(innerval)) {
+                // We already have a representative for this node inner value
+                let na_node = nonAliasingNodesMap.get(innerval)!
+                if (!Array.isArray(na_node.name)) {
+                    throw `expected type Array for field 'name' of a (non-aliasing) Node object`
+                }
+                if (Array.isArray(node.name)) {
+                    throw `potentially-aliasing nodes are expected to have only one (scalar) internal name`
+                }
+                na_node.name.push(node.name)
+            } else {
+                // Need to create a new representative node
+                let new_node = this.copyVectorizeNode(node)
+                nonAliasingNodesMap.set(innerval, new_node)
+            }
+        })
+
+        return Array.from(nonAliasingNodesMap.values())
     }
 
     private collectFields(nodes: Array<Node>): Array<Relation> {
@@ -158,14 +206,18 @@ export class Session {
 
     public produceGraphModel(): GraphModel {
         let nodes = this.collectGraphNodes()
-        let fields = this.collectFields(nodes.filter(node => node.type && node.type.typename === 'Ref'))
-        
-        let graph = new Graph('G', nodes.map(n => n.id))
-        
+
         let equivalence_classes = this.collectEquivClasses(nodes)
 
+        let nonAliasingNodes = this.mergeAliases(nodes)
+
+        let fields = this.collectFields(nonAliasingNodes.filter(node => node.type && node.type.typename === 'Ref'))
+        
+        let graph = new Graph('G', nonAliasingNodes.map(n => n.id))
+        
+        
         // TODO: edges, paths
-        this.graphModel = new GraphModel(graph, nodes, fields, [], [], equivalence_classes)  
+        this.graphModel = new GraphModel(graph, nonAliasingNodes, fields, [], [], equivalence_classes)  
 
         return this.graphModel!
     }

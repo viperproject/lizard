@@ -91,16 +91,16 @@ export class OtherType implements ViperType {
 
 export class Node {
     private _: string
-    constructor(public name: string,                // e.g. "X@7@12"
-                public type: ViperType | undefined, // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
-                public id: number,                  // 0, 1, 2, ...
-                public val: string,                 // e.g. "$Ref!val!0"
+    constructor(public name: string | Array<string>, // e.g. "X@7@12" or ["$FOOTPRINT@0@12", "$FOOTPRINT@1@12"]
+                public type: ViperType | undefined,  // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
+                public id: number,                   // 0, 1, 2, ...
+                public val: string,                  // e.g. "$Ref!val!0"
                 public proto: string | undefined = undefined) { // e.g. "X"
     
         if (type) {
-            this._ = `${name}:${type.typename} = ${val}`
+            this._ = `${proto}: ${type.typename} = ${val}`
         } else {
-            this._ = `${name} = ${val}`
+            this._ = `${proto} = ${val}`
         }
     }  
 }
