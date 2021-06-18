@@ -121,7 +121,8 @@ const JsonConfig = {
     theme: 'dark',
     animateOpen: false,
     animateClose: false,
-    useToJSON: true
+    useToJSON: true,
+    sortPropertiesBy: (a: string, b: string) => (a === '_' ? -1 : 0)
 }
 
 namespace PanelState {
