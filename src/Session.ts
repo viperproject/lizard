@@ -1,7 +1,7 @@
 import { Logger } from "./logger"
 import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry,  } from "./Models"
 import { ViperDefinition, ViperLocation } from "./ViperAST"
-import { ViperTypesProvider } from "./ViperTypesExtractor"
+import { ViperTypesProvider } from "./ViperTypesProvider"
 
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
@@ -184,6 +184,16 @@ export class Session {
 
     private collectFields(nodes: Array<Node>): Array<Relation> {
         let fnames = this.getDefinitionNames('Field')
+
+        // Check if the method containing the failed assertion uses any fields at all
+        let useful_fields = fnames.find(fname => {
+            let rel_name = this.fieldLookupRelationName(fname)
+            let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
+            return rel_maybe !== undefined
+        })
+        if (useful_fields === undefined) {
+            return []
+        }
 
         // Deduce relations for each field, node, state
         let state_to_field_val_funs = fnames.flatMap(fname => 
