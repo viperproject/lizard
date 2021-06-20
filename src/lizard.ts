@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import { DebuggerPanel } from './DebuggerPanel'
+import { DotGraph } from './DotGraph'
 import { viperApi } from './extension'
 import { Logger, LogLevel } from './logger'
 import { GraphModel } from './Models'
@@ -56,7 +57,7 @@ export namespace Lizard {
             }
             Logger.info(`✓ preprocessed the raw model`)
 
-            // Step 2 -- 
+            // Step 2 -- model refinement
             let graphModel: GraphModel
             try {
                 graphModel = debugSession!.produceGraphModel()
@@ -64,9 +65,10 @@ export namespace Lizard {
                 Logger.error(`Session.produceGraphModel() reached an exceptional situation: ${error}`)
                 return 
             }
+            panel!.emitRefinedModel(graphModel)
             
             // Step 3 -- visualization
-            panel!.emitRefinedModel(graphModel)
+            panel!.renderGraph(new DotGraph(graphModel))
 
             Logger.info(`✓ prepared the graph model. enjoy!`)
         })

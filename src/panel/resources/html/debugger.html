@@ -214,12 +214,14 @@
             </div-->
         </nav-->
     </header>
-    <div id="graphPanel" class="panel noScroll"></div>
-    <div id="mainPanel" class="panel">
+    <div id="graphPanel" class="panel">
+      <!-- <div id="graph" style="text-align: center;"></div> -->
+    </div>
+    <!-- <div id="mainPanel" class="panel">
         <h3>Heap Graph</h3>
         <div id="navigation"></div>
         <div id="currentState"></div>
-    </div>
+    </div> -->
     <div id="diagnostics" class="panel">
         <h3>Diagnostics</h3>
         <section>
@@ -237,6 +239,10 @@
               <button id="expandRawModel">Expand All</button>
             </div>
             <div id="rawModel" class="hide"></div>
+        </section>
+        <section>
+          <h4>DOT Graph Source</h4><button id="toggleDotGraphSource">Show</button>
+          <div id="dotGraphSource" class="hide"></div>
         </section>
     </div>
 </body>

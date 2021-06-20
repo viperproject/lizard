@@ -4,25 +4,49 @@ import JSONFormatter from 'json-formatter-js'
 
 const Split = require('split-js')
 
-const d3 = require('d3')
-const { HTMLSelectElement } = d3
-
-import { GraphViz } from './d3-graphviz'
-const d3graphviz = require('d3-graphviz')
+import * as d3 from 'd3-graphviz'
 
 declare var acquireVsCodeApi: any
 export const vscode = acquireVsCodeApi()
 
 const domElem = (q: string) => document.querySelector<HTMLElement>(q)!
+
 function removeAllChildren(elem: HTMLElement) {
     while (elem.firstChild) {
         elem.removeChild(elem.firstChild)
     }
 }
 
-let outpudDiv: HTMLElement
+function displayGraph(message: any) {
 
-let graph: GraphViz | undefined
+    let dot = message.text
+
+    // Print the DOT code for debug purposes
+    const pre = document.createElement('pre')
+    pre.classList.add('json')
+    pre.innerText = dot
+
+    const dotGraphSource = domElem('#dotGraphSource')
+    removeAllChildren(dotGraphSource)
+    dotGraphSource.appendChild(pre)
+    
+    const graph = document.createElement('div')
+    graph.id = 'graph'
+
+    const graphPanel = domElem('#graphPanel')
+    removeAllChildren(graphPanel)
+    graphPanel.appendChild(graph)
+    
+    let options = {
+        fit: true, 
+        useWorker: false
+    }
+    Logger.info(`starting graph render...`)
+    d3.graphviz("#graph", options).renderDot(dot)
+    Logger.info(`graph render done.`)
+
+    window.setTimeout(() => graph.style.opacity = '1', 100)
+}
 
 
 /** Sets up the debugger pane */ 
@@ -75,8 +99,19 @@ function setupMessageHandlers() {
 
     on('logModel', message => handleGraphModelMessage(message))
     on('rawModelMessage', message => handleRawModelMessage(message))
+    on('renderDotGraph', message => displayGraph(message))
     
     Logger.debug("Done setting up message handlers.")
+}
+
+function toggleSection(buttonId: string, sectionId: string) {
+    const section = domElem(sectionId)
+    section.classList.toggle('hide')
+    if (section.classList.contains('hide')) {
+        domElem(buttonId).innerText = "Show"
+    } else {
+        domElem(buttonId).innerText = "Hide"
+    }
 }
 
 // TODO: keyboard events from panel?
@@ -84,21 +119,12 @@ function setupMessageHandlers() {
 function setupInputHandlers() {
     Logger.debug("Setting up input handlers.")
 
-    domElem('button#toggleGraphModel').onclick = () => toggleSection('button#toggleGraphModel', '#graphModel')
+    domElem('button#toggleGraphModel').onclick = () => 
+        toggleSection('button#toggleGraphModel', '#graphModel')
 
-    function toggleSection(buttonId: string, sectionId: string) {
-        const section = domElem(sectionId)
-        section.classList.toggle('hide')
-        if (section.classList.contains('hide')) {
-            domElem(buttonId).innerText = "Show"
-        } else {
-            domElem(buttonId).innerText = "Hide"
-        }
-    }
-    function expandJson() {
-        
-    }
-
+    domElem('button#toggleDotGraphSource').onclick = () => 
+        toggleSection('button#toggleDotGraphSource', '#dotGraphSource')
+    
     domElem('button#copyGraphModel').onclick = () => {
         const temp = document.createElement('textarea')
         domElem('body').appendChild(temp)
@@ -107,12 +133,14 @@ function setupInputHandlers() {
         document.execCommand('copy')
         temp.remove()
     }
-    domElem('button#toggleRawModel').onclick = () => toggleSection('button#toggleRawModel', '#rawModel')
-    domElem('button#expandRawModel').onclick = () => PanelState.rawModel!.openAtDepth(Infinity)
+    domElem('button#toggleRawModel').onclick = () => 
+        toggleSection('button#toggleRawModel', '#rawModel')
+
+    domElem('button#expandRawModel').onclick = () => 
+        PanelState.rawModel!.openAtDepth(Infinity)
    
     Logger.debug("Done setting up input handlers.")
 }
-
 
 const JsonConfig = {
     hoverPreviewEnabled: true,

@@ -1,13 +1,6 @@
-const webpack = require('webpack');
-// import webpack from "./webpack"
-const glob = require('glob');
-// import glob from "./glob"
 const path = require('path');
-// import path from "./path"
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-// import MiniCssExtractPlugin from "./mini-css-extract-plugin"
 const HtmlWebpackPlugin = require('html-webpack-plugin');
-//import HtmlWebpackPlugin from "./html-webpack-plugin"
 
 module.exports = function(env, argv) {
     if (env === undefined) {
@@ -15,10 +8,8 @@ module.exports = function(env, argv) {
     }
 
     const production = !!env.production;
-
-    const quick = !production && !!env.quick;
-    const minify = production;
     const sourceMaps = !production;
+
     const plugins = [
         new HtmlWebpackPlugin({
             template: './resources/html/debugger.html',
@@ -28,88 +19,6 @@ module.exports = function(env, argv) {
             filename: '[name].css'
         }),
     ];
-
-    // const plugins = [
-    //     new webpack.optimize.ModuleConcatenationPlugin(),
-    //     new ExtractTextPlugin({
-    //         filename: 'main.css'
-    //     }),
-    //     new HtmlWebpackPlugin({
-    //         excludeAssets: [/.*\.main\.js/],
-    //         excludeChunks: ['welcome'],
-    //         template: 'settings/index.html',
-    //         filename: path.resolve(__dirname, '../..', 'settings.html'),
-    //         inject: true,
-    //         inlineSource: production ? '.(js|css)$' : undefined,
-    //         // inlineSource: '.(js|css)$',
-    //         minify: minify
-    //             ? {
-    //                 removeComments: true,
-    //                 collapseWhitespace: true,
-    //                 removeRedundantAttributes: true,
-    //                 useShortDoctype: true,
-    //                 removeEmptyAttributes: true,
-    //                 removeStyleLinkTypeAttributes: true,
-    //                 keepClosingSlash: true
-    //             }
-    //             : false
-    //     }),
-    //     new HtmlWebpackPlugin({
-    //         excludeAssets: [/.*\.main\.js/],
-    //         excludeChunks: ['settings'],
-    //         template: 'welcome/index.html',
-    //         filename: path.resolve(__dirname, '../..', 'welcome.html'),
-    //         inject: true,
-    //         inlineSource: production ? '.(js|css)$' : undefined,
-    //         // inlineSource: '.(js|css)$',
-    //         minify: minify
-    //             ? {
-    //                 removeComments: true,
-    //                 collapseWhitespace: true,
-    //                 removeRedundantAttributes: true,
-    //                 useShortDoctype: true,
-    //                 removeEmptyAttributes: true,
-    //                 removeStyleLinkTypeAttributes: true,
-    //                 keepClosingSlash: true
-    //             }
-    //             : false
-    //     }),
-    //     new HtmlWebpackInlineSourcePlugin(),
-    //     new UglifyJsPlugin({
-    //         parallel: true,
-    //         sourceMap: sourceMaps,
-    //         uglifyOptions: {
-    //             ecma: 5,
-    //             compress: minify,
-    //             mangle: minify,
-    //             output: {
-    //                 beautify: !minify,
-    //                 comments: false,
-    //                 ecma: 5
-    //             }
-    //         }
-    //     })
-    // ];
-
-    // if (!quick) {
-    //     plugins.push(
-    //         new ImageminPlugin({
-    //             disable: false,
-    //             externalImages: {
-    //                 sources: glob.sync(path.resolve(__dirname, 'images/settings/*.png')),
-    //                 destination: path.resolve(__dirname, '../..')
-    //             },
-    //             gifsicle: null,
-    //             jpegtran: null,
-    //             optipng: null,
-    //             pngquant: {
-    //                 quality: '85-100',
-    //                 speed: minify ? 1 : 10
-    //             },
-    //             svgo: null
-    //         })
-    //     );
-    // }
 
     return {
         // This is ugly having main.scss on both bundles, but if it is added separately it will generate a js bundle :(

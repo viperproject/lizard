@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import * as path from 'path'
 import * as fs from 'fs'
 import { GraphModel } from './Models'
+import { DotGraph } from './DotGraph'
 
 export class DebuggerPanel {
 
@@ -40,10 +41,17 @@ export class DebuggerPanel {
         })
     }
 
-    public emitRefinedModel(message: GraphModel) {
+    public emitRefinedModel(model: GraphModel) {
         this.panel.webview.postMessage({
             type: 'logModel',
-            text: message
+            text: model
+        })
+    }
+
+    public renderGraph(graph: DotGraph) {
+        this.panel.webview.postMessage({
+            type: 'renderDotGraph',
+            text: graph.dotEncoding()
         })
     }
 
