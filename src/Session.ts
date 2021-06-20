@@ -1,6 +1,6 @@
 import { Logger } from "./logger"
-import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry,  } from "./Models"
-import { ViperDefinition, ViperLocation } from "./ViperAST"
+import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry } from "./Models"
+import { ViperDefinition } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
 
 export class Session {
@@ -84,7 +84,7 @@ export class Session {
     }
 
     private atoms: Array<Node> | undefined = undefined
-    private states: Array<string> | undefined = undefined 
+    private states: Array<State> | undefined = undefined 
     private extended_equiv_classes: EquivClasses | undefined = undefined
 
     private graphModel: GraphModel | undefined = undefined
@@ -177,8 +177,8 @@ export class Session {
                 na_node.aliases.push(node.aliases)
             } else {
                 // Need to create a new representative node
-                let new_node = this.copyVectorizeNode(node)
-                nonAliasingNodesMap.set(innerval, new_node)
+                // let new_node = this.copyVectorizeNode(node)
+                nonAliasingNodesMap.set(innerval, node)
             }
         })
 
@@ -220,10 +220,10 @@ export class Session {
 
         let fields = this.collectFields(nonAliasingNodes.filter(node => node.type && node.type.typename === 'Ref'))
         
-        let graph = new Graph('G', nonAliasingNodes.map(n => n.id))
+        // let graph = new Graph('G', nonAliasingNodes.map(n => n.id))
         
         // TODO: edges, paths
-        this.graphModel = new GraphModel(graph, nonAliasingNodes, fields, [], [], equivalence_classes)  
+        this.graphModel = new GraphModel(this.states!, /*graph,*/ nonAliasingNodes, fields, [], [], equivalence_classes)  
 
         return this.graphModel!
     }
@@ -274,7 +274,7 @@ export class Session {
             this.collectDependentEntriesRec([entry[0]], entry[1], dep_value))
     }
 
-    private collectFieldValueInfo(node: Node, fname: string): (state: string) => Node {
+    private collectFieldValueInfo(node: Node, fname: string): (state: State) => Node {
         let rel_name = this.fieldLookupRelationName(fname)
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
         if (!rel_maybe) {
@@ -286,8 +286,8 @@ export class Session {
         }
         let field_node_val = this.fieldNodeValue(fname)
         let simple_fun = this.partiallyApplyFieldMapEntry(<MapEntry> rel, node.val, field_node_val)
-        return (state: string) => {
-            let succ_innerval = simple_fun(state)
+        return (state: State) => {
+            let succ_innerval = simple_fun(state.val)
             let succ: Node
             if (this.extended_equiv_classes!.hasOwnProperty(succ_innerval)) {
                 let succs = this.extended_equiv_classes![succ_innerval]
@@ -299,7 +299,7 @@ export class Session {
             } else {
                 // this is a fresh value; create a new atom to support it
                 let name = `${node.aliases}.${fname}`
-                Logger.warn(`no atom found for value ${succ_innerval} of ${name} in state ${state}`)
+                Logger.warn(`no atom found for value ${succ_innerval} of ${name} in state ${state.name}`)
                 succ = this.mkNode(name, succ_innerval)
                 this.extended_equiv_classes![succ_innerval] = new Array<Node>(succ)
             }
@@ -349,16 +349,16 @@ export class Session {
         return this.isCarbon() ? 'null' : '$Ref.null'
     }
 
-    private collectStates(): Array<string> {
+    private collectStates(): Array<State> {
         return Object.entries(this.model!).filter(pair => {
             let entry_name = pair[0]
             let entry = pair[1]
             if (this.isCarbon()) {
-                return entry_name.startsWith('Heap@@')
+                return entry.type === 'constant_entry' && entry_name.includes('Heap')
             } else {
                 return entry.type === 'constant_entry' && (<ConstantEntry> entry).value.startsWith('$FVF<')
             }
-        }).map(pair => (<ConstantEntry> pair[1]).value)
+        }).map(pair => new State(pair[0], (<ConstantEntry> pair[1]).value))
     }
 
     private partiallyApplyFieldMapEntry(m_entry: MapEntry, reciever: string, field: string | undefined): (state: string) => string {

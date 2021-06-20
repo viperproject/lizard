@@ -115,7 +115,7 @@ export class Graph {
 export class Relation {
     private _: string
     constructor(public name: string,  // e.g. "NEXT", "edge", or "exists_path"
-                public state: string, // Heap@@1
+                public state: State,  // e.g. { name: "Heap@@1", val: "T@U!val!11" }
                 public pred: Node, 
                 public succ: Node) {
     
@@ -123,9 +123,15 @@ export class Relation {
     }
 }
 
+export class State { 
+    constructor(public name: string,
+                public val: string) {}
+}
+
 export class GraphModel {
     constructor(
-        public graph: Graph,
+        public states: Array<State>, 
+        // public graph: Graph,
         public nodes: Array<Node>,
 
         public fields: Array<Relation>,
