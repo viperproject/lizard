@@ -24,13 +24,21 @@ input:focus {
 }
 select,
 button {
-    padding: 4px 10px;
     box-sizing: border-box;
-    height: 24px;
     vertical-align: top;
     border: 0;
     border-radius: 2px;
     background: #aaaaaa;
+}
+
+button {
+    padding: 4px 10px;
+    height: 24px;
+}
+
+#programStates {
+    padding: 0;
+    height: 60px;
 }
 
 select:hover:not(:disabled),

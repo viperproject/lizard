@@ -17,6 +17,23 @@ function removeAllChildren(elem: HTMLElement) {
     }
 }
 
+function getSelectValues(select: HTMLSelectElement): Array<string> {
+    // Based on https://stackoverflow.com/a/27781069/12163693
+
+    let result = []
+    let options = select && select.options
+      
+    for (let opt, i=0; i < options.length; i ++) {
+      opt = options[i]
+  
+      if (opt.selected) {
+        result.push(opt.value || opt.text)
+      }
+    }
+
+    return result
+  }
+
 function displayGraph(message: any) {
 
     let dot = message.text
@@ -100,8 +117,22 @@ function setupMessageHandlers() {
     on('logModel', message => handleGraphModelMessage(message))
     on('rawModelMessage', message => handleRawModelMessage(message))
     on('renderDotGraph', message => displayGraph(message))
+    on('programStates', message => { initProgramStateSelect(message) })
     
     Logger.debug("Done setting up message handlers.")
+}
+
+function initProgramStateSelect(message: any) {
+    let progStateSelect = <HTMLSelectElement> domElem('select#programStates')
+    let states: Array<{name: string, val: string}> = message.text
+    states.forEach(state => {
+        let item: HTMLOptionElement = document.createElement('option')
+        item.value = state.name
+        item.title = state.val
+        item.label = state.name
+        progStateSelect.add(item)
+    })
+    progStateSelect.disabled = false
 }
 
 function toggleSection(buttonId: string, sectionId: string) {
@@ -138,6 +169,15 @@ function setupInputHandlers() {
 
     domElem('button#expandRawModel').onclick = () => 
         PanelState.rawModel!.openAtDepth(Infinity)
+
+    let progStateSelect = <HTMLSelectElement> domElem('select#programStates')
+    progStateSelect.onchange = function() {
+        const disabled = progStateSelect.hasAttribute('disabled')
+        if (!disabled) {
+            let selected = getSelectValues(progStateSelect)
+            vscode.postMessage({ command: 'filterStates', state_names: selected })
+        }
+    }
    
     Logger.debug("Done setting up input handlers.")
 }

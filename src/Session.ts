@@ -1,5 +1,6 @@
 import { Logger } from "./logger"
 import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry } from "./Models"
+import { Query } from "./Query"
 import { ViperDefinition } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
 
@@ -84,9 +85,10 @@ export class Session {
     }
 
     private atoms: Array<Node> | undefined = undefined
-    private states: Array<State> | undefined = undefined 
+    public states: Array<State> | undefined = undefined 
     private extended_equiv_classes: EquivClasses | undefined = undefined
 
+    private latestQuery: GraphModel | undefined = undefined 
     private graphModel: GraphModel | undefined = undefined
 
     public preProcessRawModel(): void {
@@ -226,6 +228,19 @@ export class Session {
         this.graphModel = new GraphModel(this.states!, /*graph,*/ nonAliasingNodes, fields, [], [], equivalence_classes)  
 
         return this.graphModel!
+    }
+
+    public applyQuery(query: Query): GraphModel {
+
+        // Filter the states
+        let state_name_hash = new Map<string, undefined>()
+        query.states.forEach(state_name => state_name_hash.set(state_name, undefined))
+
+        let filtered_fields = this.graphModel!.fields.filter(field => state_name_hash.has(field.state.name))
+        this.latestQuery = Object.create(this.graphModel!)
+        this.latestQuery!.fields = filtered_fields
+        
+        return this.latestQuery!
     }
 
     private getDefinitionNames(type: string): Array<string> {

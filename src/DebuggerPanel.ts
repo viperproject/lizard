@@ -1,8 +1,10 @@
 import * as vscode from 'vscode'
 import * as path from 'path'
 import * as fs from 'fs'
-import { GraphModel } from './Models'
+import { GraphModel, State } from './Models'
 import { DotGraph } from './DotGraph'
+import { Logger } from './logger'
+import { Query } from './Query'
 
 export class DebuggerPanel {
 
@@ -24,14 +26,27 @@ export class DebuggerPanel {
 
     private panel: vscode.WebviewPanel
 
-    constructor(readonly extensionPath: string) {
+    constructor(readonly extensionPath: string,
+                readonly queryHandler: (q: Query) => any) {
+
         this.panel = vscode.window.createWebviewPanel(
             'viperDebugPanel',
             "Viper Debugger",
             vscode.ViewColumn.Two,
             DebuggerPanel.webviewOptions
         )
+        this.panel.webview.onDidReceiveMessage((m) => {
+            this.handleMessageFromPanel(m)
+        })
         this.panel.webview.html = DebuggerPanel.loadWebviewContent(this.extensionPath)
+    }
+    
+    public reveal() {
+        this.panel.reveal()
+    }
+
+    public dispose() {
+        this.panel.dispose()
     }
 
     public emitRawModel(model: any) {
@@ -55,12 +70,24 @@ export class DebuggerPanel {
         })
     }
 
-    public reveal() {
-        this.panel.reveal()
+    public listProgramStates(states: Array<State>) {
+        this.panel.webview.postMessage({
+            type: 'programStates',
+            text: states
+        })
     }
 
-    public dispose() {
-        this.panel.dispose()
+    private handleMessageFromPanel(message: any) {
+        switch (message.command) { 
+            case 'filterStates': 
+                let state_names: Array<string> = message.state_names
+                this.queryHandler(new Query(state_names))
+                break 
+
+            default:
+                Logger.error(`Unknown command from debug pane: '${message}'`);
+        }
     }
+
 }
 

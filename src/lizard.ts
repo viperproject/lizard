@@ -4,11 +4,12 @@ import { DotGraph } from './DotGraph'
 import { viperApi } from './extension'
 import { Logger, LogLevel } from './logger'
 import { GraphModel } from './Models'
+import { Query } from './Query'
 import { Session } from './Session'
 
 export namespace Lizard {
 
-    var debugSession: Session | undefined = undefined
+    var session: Session | undefined = undefined
     var panel: DebuggerPanel | undefined = undefined
     var sessionCounter = 0
 
@@ -23,13 +24,41 @@ export namespace Lizard {
         viperApi.registerServerMessageCallback('program_definitions', (messageType: string, message: any) => {
             Logger.debug(`recieved message of type 'program_definitions'`)
             
-            debugSession = new Session(viperApi.getBackendName())
-            debugSession.setProgramDefs(message.msg_body.definitions)
+            session = new Session(viperApi.getBackendName())
+            session.setProgramDefs(message.msg_body.definitions)
         
             if (panel) panel!.dispose()
-            panel = new DebuggerPanel(context.extensionPath)
+            panel = new DebuggerPanel(context.extensionPath, handleQuery)
             panel.reveal()
         })
+
+        function tryProducingGraphModel(query?: Query, 
+                                        onError?: (error: any) => void): GraphModel | undefined {
+            let model_maybe: GraphModel | undefined
+            try {
+                if (query) {
+                    model_maybe = session!.applyQuery(query)
+                } else {
+                    model_maybe = session!.produceGraphModel()
+                }
+            } catch (error) {
+                Logger.error(`Session.produceGraphModel() reached an exceptional situation: ${error}`)
+                if (onError) {
+                    onError(error)
+                }
+            }
+            return model_maybe
+        }
+
+        function handleQuery(query: Query) {
+            let graph_model = tryProducingGraphModel(query)
+            if (!graph_model) return 
+            panel!.emitRefinedModel(graph_model)
+            Logger.info(`✓ processed query ${JSON.stringify(query)}`)
+
+            panel!.renderGraph(new DotGraph(graph_model))
+            Logger.info(`✓ rendered the graph model. enjoy!`)
+        }
         
         viperApi.registerServerMessageCallback('verification_result', (messageType: string, message: any) => {
             Logger.debug(`recieved message of type 'verification_result'`)
@@ -46,31 +75,33 @@ export namespace Lizard {
             Logger.info(`↓↓↓ Starting debug session №${++sessionCounter} ↓↓↓`)
 
             // Step 1 -- preprocessing
-            debugSession!.parseModel(counterexample.model!)
-            panel!.emitRawModel(debugSession!.model!)
+            session!.parseModel(counterexample.model!)
+            panel!.emitRawModel(session!.model!)
             Logger.info(`✓ parsed raw SMT model`)
             try {
-                debugSession!.preProcessRawModel()
+                session!.preProcessRawModel()
             } catch (error) {
                 Logger.error(`Session.preProcessRawModel() reached an exceptional situation: ${error}`)
                 return 
             }
+            panel!.listProgramStates(session!.states!)
+
             Logger.info(`✓ preprocessed the raw model`)
 
             // Step 2 -- model refinement
             let graphModel: GraphModel
             try {
-                graphModel = debugSession!.produceGraphModel()
+                graphModel = session!.produceGraphModel()
             } catch (error) {
                 Logger.error(`Session.produceGraphModel() reached an exceptional situation: ${error}`)
                 return 
             }
             panel!.emitRefinedModel(graphModel)
+            Logger.info(`✓ prepared the graph model`)
             
             // Step 3 -- visualization
             panel!.renderGraph(new DotGraph(graphModel))
-
-            Logger.info(`✓ prepared the graph model. enjoy!`)
+            Logger.info(`✓ rendered the graph model. enjoy!`)
         })
     }
 }
