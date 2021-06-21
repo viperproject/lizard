@@ -5,7 +5,7 @@ export interface ModelEntry {
 export class ConstantEntry implements ModelEntry {
     type = 'constant_entry'
     value: string
-    constructor(v: string) {
+    constructor(readonly v: string) {
         this.value = v
     }
 }
@@ -24,10 +24,7 @@ export interface FunctionValue {
 
 export class ApplicationEntry implements ModelEntry {
     type = 'application_entry'
-    value: FunctionValue
-    constructor(value: FunctionValue) {
-        this.value = value
-    }
+    constructor(readonly value: FunctionValue) {}
 }
 
 export interface ModelCase {
@@ -39,7 +36,7 @@ export class MapEntry implements ModelEntry {
     type = 'map_entry'
     cases: Array<ModelCase>  
     default: ModelEntry
-    constructor(cs: Array<ModelCase>, df: ModelEntry) {
+    constructor(readonly cs: Array<ModelCase>, df: ModelEntry) {
         this.cases = cs
         this.default = df
     }
@@ -56,76 +53,87 @@ export interface ViperType {
 
 export class RefType implements ViperType {
     typename = "Ref"
-    constructor(public innerval: string | undefined = undefined) {}
+    constructor(readonly innerval: string | undefined = undefined) {}
 }
 
 export class IntType implements ViperType {
     typename = "Int"
-    constructor(public innerval: string | undefined = undefined) {}
+    constructor(readonly innerval: string | undefined = undefined) {}
 }
 
 export class BoolType implements ViperType {
     typename = "Bool"
-    constructor(public innerval: string | undefined = undefined) {}
+    constructor(readonly innerval: string | undefined = undefined) {}
 }
 
 export class PermType implements ViperType {
     typename = "Perm"
-    constructor(public innerval: string | undefined = undefined) {}
+    constructor(readonly innerval: string | undefined = undefined) {}
 }
 
 export class SetType implements ViperType {
     typename: string
-    constructor(public innerval: string | undefined = undefined, 
-                public type_arg: ViperType) {
+    constructor(readonly innerval: string | undefined = undefined, 
+                readonly type_arg: ViperType) {
         this.typename = `Set[${type_arg.typename}]`
     }
 }
 
 export class OtherType implements ViperType {
     typename = "Other"
-    constructor(public innerval: string | undefined = undefined) {}
+    constructor(readonly innerval: string | undefined = undefined) {}
 }
 
 // TODO: support other types e.g. Maps, Multisets, etc. 
 
 export class Node {
-    private _: string
+    /** This dynamic field enables JSONFormatter to pretty pront the node. */
+    private _: string 
+
+    public repr(): string {
+        let readable_name = Array.isArray(this.aliases) ? `${this.aliases.join(' = ')}` : this.aliases
+        if (this.type) {
+            return `${readable_name}: ${this.type.typename} = ${this.val}`
+        } else {
+            return `${readable_name} = ${this.val}`
+        }
+    }
     constructor(public aliases: string | Array<string>, // e.g. "X@7@12" or ["$FOOTPRINT@0@12", "$FOOTPRINT@1@12"]
-                public type: ViperType | undefined,     // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
-                public id: number,                      // 0, 1, 2, ...
-                public val: string,                     // e.g. "$Ref!val!0"
+                readonly type: ViperType | undefined,     // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
+                readonly id: number,                      // 0, 1, 2, ...
+                readonly val: string,                     // e.g. "$Ref!val!0"
                 public proto: string | undefined = undefined) { // e.g. "X"
     
-        let readable_name = proto ? proto : (Array.isArray(aliases) ? `e.g.${aliases[0]}` : aliases)
-        if (type) {
-            this._ = `${readable_name}: ${type.typename} = ${val}`
-        } else {
-            this._ = `${readable_name} = ${val}`
-        }
-    }  
+        this._ = this.repr()
+        // A node's pretty representation is computed dynamically since the fields are mutable. 
+        Object.defineProperty(this, '_', {
+            get: function() {
+                return this.repr()
+            }
+        })
+    }
 }
 
 export class Graph {
-    constructor(public name: string, 
-                //public state: string, 
-                public node_ids: Array<number>) {}
+    constructor(readonly name: string, 
+                //readonly state: string, 
+                readonly node_ids: Array<number>) {}
 }
 
 export class Relation {
     private _: string
-    constructor(public name: string,  // e.g. "NEXT", "edge", or "exists_path"
-                public state: State,  // e.g. { name: "Heap@@1", val: "T@U!val!11" }
-                public pred: Node, 
-                public succ: Node) {
+    constructor(readonly name: string,  // e.g. "NEXT", "edge", or "exists_path"
+                readonly state: State,  // e.g. { name: "Heap@@1", val: "T@U!val!11" }
+                readonly pred: Node, 
+                readonly succ: Node) {
     
         this._ = `${name}[ ${state} ](${pred.aliases}, ${succ.aliases})`
     }
 }
 
 export class State { 
-    constructor(public name: string,
-                public val: string) {}
+    constructor(readonly name: string,
+                readonly val: string) {}
 }
 
 export class GraphModel {

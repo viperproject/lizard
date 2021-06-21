@@ -1,11 +1,12 @@
 import { Logger } from "./logger"
 import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry } from "./Models"
 import { Query } from "./Query"
-import { ViperDefinition } from "./ViperAST"
+import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
 
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
+    public errorLocation: ViperLocation | undefined = undefined   // e.g. "30:22" meaning line 30, column 22
     public model: Model | undefined = undefined
 
     public isSilicon(): boolean {
@@ -44,12 +45,33 @@ export class Session {
         return new Node(new Array(node.aliases), node.type, this.freshNodeId(), node.val, node.proto)
     } 
 
-    static myRelations = ['[2]', '[3]', '[4:=]', 
-                          'exists_path_', 'exists_path', 
-                          'edge_', 'edge', '$$', '$$\'']
+    // static myRelations = ['[2]', '[3]', '[4:=]', 
+    //                       'exists_path_', 'exists_path', 
+    //                       'edge_', 'edge', '$$', '$$\'']
 
-    public setProgramDefs(pds: Array<ViperDefinition>): void {
-        this.programDefinitions = pds
+    public parseProgramDefinitions(pds: Array<any>): void {
+        this.programDefinitions = pds.map(pd => {
+            let file = pd.location.file
+            let loc = new ViperLocation(pd.location.start, file)
+            let scopeStart: ViperLocation | 'global' = 
+                (pd.scopeStart === 'global') ? 'global' : new ViperLocation(pd.scopeStart, file)
+            let scopeEnd: ViperLocation | 'global' = 
+                (pd.scopeEnd === 'global') ? 'global' : new ViperLocation(pd.scopeEnd, file)
+            
+            if (pd.type.hasOwnProperty('viperType')) {
+                let typ = { name: pd.type.name, viperType: <Type> pd.type.viperType }
+                let new_def = new TypedViperDefinition(pd.name, loc, scopeStart, scopeEnd, typ)
+                return new_def
+            } else {
+                let typ = { name: pd.type.name }
+                let new_def = new ViperDefinition(pd.name, loc, scopeStart, scopeEnd, typ)
+                return new_def
+            }
+        })
+    }
+
+    public setErrorLocation(error_location: ViperLocation): void {
+        this.errorLocation = error_location
     }
 
     public parseModel(m: Model): void {
@@ -135,6 +157,7 @@ export class Session {
         
         let names = this.getDefinitionNames('Local')
                     .concat(this.getDefinitionNames('Argument'))
+                    .concat(this.getDefinitionNames('Return'))
                     .concat(this.nullNodeName())
 
         // Find atoms that define graph nodes
@@ -144,7 +167,7 @@ export class Session {
                 if (Array.isArray(atom_name)) {
                     throw `each node shoudl have one internal name at this point`
                 }
-                return atom_name.startsWith(proto)
+                return this.isPrototypeOf(proto, atom_name)
             }).map(atom => {
                     // Set the prototype variable for this atom
                     atom.proto = proto
@@ -171,15 +194,16 @@ export class Session {
                 // We already have a representative for this node inner value
                 let na_node = nonAliasingNodesMap.get(innerval)!
                 if (!Array.isArray(na_node.aliases)) {
-                    throw `expected type Array for field 'name' of a (non-aliasing) Node object`
+                    throw `expected type Array for field 'aliases' of Node object ${JSON.stringify(na_node)}`
                 }
                 if (Array.isArray(node.aliases)) {
-                    throw `potentially-aliasing nodes are expected to have only one (scalar) internal name`
+                    throw `aliasing node ${JSON.stringify(node)} is expected to have only one (scalar) internal name`
                 }
                 na_node.aliases.push(node.aliases)
             } else {
-                // Need to create a new representative node
-                // let new_node = this.copyVectorizeNode(node)
+                // Vectorize the aliases of this node
+                node.aliases = new Array<string>(<string> node.aliases)
+                
                 nonAliasingNodesMap.set(innerval, node)
             }
         })
@@ -237,14 +261,20 @@ export class Session {
         query.states.forEach(state_name => state_name_hash.set(state_name, undefined))
 
         let filtered_fields = this.graphModel!.fields.filter(field => state_name_hash.has(field.state.name))
-        this.latestQuery = Object.create(this.graphModel!)
+        this.latestQuery = new GraphModel([], [], [], [], [], new EquivClasses())
+        Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
         
         return this.latestQuery!
     }
 
     private getDefinitionNames(type: string): Array<string> {
-        return this.programDefinitions!.filter(def => def.type.name === type).flatMap(def => def.name)
+        return this.programDefinitions!.filter(def => {
+            let matches_type = (def.type.name === type)
+            // Check if the error we are debugging is in the scope of this definition
+            let matches_error_location = this.errorLocation!.inScope(def.scopeStart, def.scopeEnd)
+            return matches_type && matches_error_location
+        }).flatMap(def => def.name)
     }
 
     private getDefinitionModelValues(idn: string): Array<[string, ModelEntry]> {
@@ -362,6 +392,16 @@ export class Session {
 
     private nullNodeName(): string {
         return this.isCarbon() ? 'null' : '$Ref.null'
+    }
+
+    /** Returns true iff 'lhs' is the name of the prototype of the 'rhs' */
+    private isPrototypeOf(proto: string, name: string) {
+        if (this.isCarbon()) {
+            return name.split('@')[0] === proto
+        } else {
+            // TODO: check this
+            return name.split('@')[0] === proto
+        }
     }
 
     private collectStates(): Array<State> {

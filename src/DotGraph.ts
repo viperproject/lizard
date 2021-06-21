@@ -45,7 +45,7 @@ export class DotGraph {
     }
 
     private renderNode(node: Node): string {
-        return `"N${node.id}" [ ${this.nodeSettings(node)} label="${node.proto}" ];`
+        return `"N${node.id}" [ ${this.nodeSettings(node)} label="${node.repr()}" ];`
     }
 
     private renderField(field: Relation): string {

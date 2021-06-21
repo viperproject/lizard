@@ -1,12 +1,9 @@
 import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry,  } from "./Models"
-import { ViperDefinition } from "./ViperAST"
+import { ViperDefinition, AtomicType, BackendType, GenericType, Type, BuiltinCollectionType, MapType, DomainType, TypedViperDefinition } from "./ViperAST"
 
 // import { Session } from './Session'
 
 export class ViperTypesProvider {
-
-    // constructor(private programDefinitions: Array<ViperDefinition>,
-    //             private innerToProto: (inned_name: string) => string) {}
 
     public get: (nodename: string) => ViperType = (nodename: string) => { 
         throw `ViperTypesProvider is not ready yet` 
@@ -41,43 +38,45 @@ export class ViperTypesProvider {
             }
         }
         // Collect things that should be statically typed
-        let typed_definitions = this.programDefinitions.filter(def => def.type.hasOwnProperty('viperType'))
+        let typed_definitions = this.programDefinitions.filter(def => 
+            def.type.hasOwnProperty('viperType')).map(x => <TypedViperDefinition> x)
 
-        // Map typed things to types
+        // Map typed things to their types
         typed_definitions.forEach(typed_def => {
-            let thing = typed_def.name
+            let name = typed_def.name
             let vipertype = typed_def.type.viperType
-            let typename: string
+            let type_str: string
 
             if (vipertype.kind === 'atomic') {
                 // Atomic types are normally already cached, unless it is backend-specific
-                if (vipertype.typename.hasOwnProperty('smtName')) {
+                let atomic_type = <AtomicType> vipertype.typename
+                if (atomic_type.hasOwnProperty('smtName')) {
                     // The rare case
-                    typename = <string> vipertype.typename.smtName
+                    type_str = (<BackendType> atomic_type).smtName
                 } else {
                     // The normal case
-                    typename = <string> vipertype.typename
+                    type_str = <string> atomic_type
                 }     
             } else if (vipertype.kind === 'generic') {
                 // Generic types can be concrete of with (partially-) instantiated type perameters. 
                 if (vipertype.isConcrete) {
                     // This must be a collection (Seq[T], Set[T], Map[T,S], $CustomType[A,B,C,...])
-                    typename = ViperTypesProvider.serializeConcreteViperTypeRec(vipertype.typename)
+                    type_str = ViperTypesProvider.serializeConcreteViperTypeRec(vipertype)
                 } else {
                     // Non-concrete collection types are pre-serialized
-                    typename = vipertype.typename
+                    type_str = <string> vipertype.typename
                 }
             } else if (vipertype.kind === 'extension') {
                 // Extension types are pre-serialized for now 
                 // (See ViperServer viper/server/frontends/http/jsonWriters/ViperIDEProtocol.scala)
-                typename = vipertype.typename
+                type_str = <string> vipertype.typename
             } else {
                 // TODO: generalize to arbitrary types
-                typename = vipertype.typename
+                type_str = <string> vipertype.typename
             }
 
-            let typ = strToType(typename)
-            viper_type_map.set(thing, typ)
+            let typ = strToType(type_str)
+            viper_type_map.set(name, typ)
         })
 
         this.get = (nodename: string) => {
@@ -86,25 +85,37 @@ export class ViperTypesProvider {
         }
     }
 
-    private static serializeConcreteViperTypeRec: (typ: any) => string = (typ: any) => {
+    private static serializeConcreteViperTypeRec(typ: Type): string {
         if (typ.kind === 'atomic') {
-            return typ.typename
-        } else if (typ.hasOwnProperty('collection')) {
-            let collection = typ.collection
+            if (typ.typename.hasOwnProperty('smtName')) {
+                return (<BackendType> typ.typename).smtName
+            } else {
+                return <string> typ.typename
+            }
+        } else if (typ.kind === 'generic') {
+            let generic_type = <GenericType> typ.typename
+            let collection = generic_type.collection
             if (collection === 'Set' || collection === 'Seq' || collection === 'MultiSet') {
-                let elem_type: string = ViperTypesProvider.serializeConcreteViperTypeRec(typ.elements)
+                // Expect one type parameter
+                let builtin_collection_type = <BuiltinCollectionType> generic_type
+                let elem_type: string = ViperTypesProvider.serializeConcreteViperTypeRec(builtin_collection_type.elements)
                 return `${collection}[${elem_type}]`
 
             } else if (collection == 'Map') {
-                let keys_type: string = ViperTypesProvider.serializeConcreteViperTypeRec(typ.keys)
-                let values_type: string = ViperTypesProvider.serializeConcreteViperTypeRec(typ.values)
+                // Expect two type parameters
+                let map_type = <MapType> generic_type
+                let keys_type: string = ViperTypesProvider.serializeConcreteViperTypeRec(map_type.keys)
+                let values_type: string = ViperTypesProvider.serializeConcreteViperTypeRec(map_type.values)
                 return `Map[${keys_type},${values_type}]`
             } else {
-                let type_args: Array<string> = typ.typeParams.map((t: any) => ViperTypesProvider.serializeConcreteViperTypeRec(t))
+                // Expect an arbitrary number of type parameters (e.g. user-defined type)
+                let domain_type = <DomainType> generic_type
+                let type_args: Array<string> = domain_type.typeParams.map((t: Type) => 
+                    ViperTypesProvider.serializeConcreteViperTypeRec(t))
                 return `${collection}[${type_args.join(',')}]`
             }
         } else {
-            throw `serialization of type ${typ} is not supported`
+            throw `serialization of type ${JSON.stringify(typ)} is not supported`
         }
     }
 }

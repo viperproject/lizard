@@ -6,6 +6,7 @@ import { Logger, LogLevel } from './logger'
 import { GraphModel } from './Models'
 import { Query } from './Query'
 import { Session } from './Session'
+import { ViperLocation } from "./ViperAST"
 
 export namespace Lizard {
 
@@ -25,7 +26,7 @@ export namespace Lizard {
             Logger.debug(`recieved message of type 'program_definitions'`)
             
             session = new Session(viperApi.getBackendName())
-            session.setProgramDefs(message.msg_body.definitions)
+            session.parseProgramDefinitions(message.msg_body.definitions)
         
             if (panel) panel!.dispose()
             panel = new DebuggerPanel(context.extensionPath, handleQuery)
@@ -64,15 +65,19 @@ export namespace Lizard {
             Logger.debug(`recieved message of type 'verification_result'`)
             let errors = message.msg_body.details.result.errors
             if (errors.length === 0) {
-                Logger.error(`message must contain verification errors`)
+                Logger.info(`message does not contain any verification errors; nothing to debug`)
                 return    
             }
             if (errors.length > 1) {
-                Logger.info(`multiple verification errors; picking the first counterexample...`)
+                Logger.warn(`multiple verification errors; picking the first counterexample...`)
             } 
             let counterexample = errors[0].counterexample
+            let error_location = errors[0].position.start
+            let error_file = errors[0].position.file
+
+            session!.setErrorLocation(new ViperLocation(error_location, error_file))
             
-            Logger.info(`↓↓↓ Starting debug session №${++sessionCounter} ↓↓↓`)
+            Logger.info(`↓↓↓ Starting debug session №${++sessionCounter} for error on ${error_location} ↓↓↓`)
 
             // Step 1 -- preprocessing
             session!.parseModel(counterexample.model!)
