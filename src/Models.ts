@@ -114,10 +114,17 @@ export class Node {
     }
 }
 
-export class Graph {
-    constructor(readonly name: string, 
-                //readonly state: string, 
-                readonly node_ids: Array<number>) {}
+export class Graph extends Node {
+
+    constructor(readonly nodes: Array<Node>, 
+                public aliases: string | Array<string>, 
+                readonly type: ViperType, 
+                readonly id: number, 
+                readonly val: string, 
+                public proto: string | undefined = undefined) {
+
+        super(aliases, type, id, val, proto)
+    }
 }
 
 export class Relation {
@@ -139,7 +146,7 @@ export class State {
 export class GraphModel {
     constructor(
         public states: Array<State>, 
-        // public graph: Graph,
+        public graphs: Array<Graph>,
         public nodes: Array<Node>,
 
         public fields: Array<Relation>,
@@ -147,6 +154,7 @@ export class GraphModel {
         public paths: Array<Relation>,
 
         public equivalence_classes: EquivClasses) {}
+
 }
 
 export class EquivClasses {

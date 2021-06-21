@@ -1,5 +1,5 @@
 import { Logger } from "./logger"
-import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry } from "./Models"
+import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -8,6 +8,19 @@ export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
     public errorLocation: ViperLocation | undefined = undefined   // e.g. "30:22" meaning line 30, column 22
     public model: Model | undefined = undefined
+
+    public getEntryByName(entry_name: string): ModelEntry | undefined {
+        let res_maybe = Object.entries(this.model!).find(pair => pair[0] === entry_name)
+        if (res_maybe === undefined) {
+            return undefined
+        } else {
+            return res_maybe![1]
+        }
+    }
+
+    private getEntriesViaRegExp(pattern: RegExp): Array<[string, ModelEntry]> {
+        return Object.entries(this.model!).filter(pair => pattern.test(pair[0]))
+    }
 
     public isSilicon(): boolean {
         return this.backend.includes('silicon')
@@ -30,7 +43,11 @@ export class Session {
     private mkNode(name: string, innerval: string, proto: string | undefined = undefined): Node {
         // Internal nodes might be of unknown type
         let typ = this.viperTypes!.get(name)
-        return new Node(name, typ, this.freshNodeId(), innerval, proto)
+        if (typ && typ.typename === 'Set[Ref]') {
+            return new Graph(new Array<Node>(), name, typ, this.freshNodeId(), innerval, proto)
+        } else {
+            return new Node(name, typ, this.freshNodeId(), innerval, proto)
+        }
     }
 
     /** Creates and returnes a new node the fields of which are identical to the given node, except: 
@@ -153,7 +170,7 @@ export class Session {
         return res
     }
 
-    private collectGraphNodes(): Array<Node> {
+    private collectGraphsAndNodes(): { nodes: Array<Node>, graphs: Array<Graph> } {
         
         let names = this.getDefinitionNames('Local')
                     .concat(this.getDefinitionNames('Argument'))
@@ -182,7 +199,11 @@ export class Session {
         // Filter old versions of variables in case the encoding uses SSA
         nodes = this.extractLatestAssignedVars(nodes)
 
-        return nodes
+        // Split abstract nodes into Node 
+        let graphs = nodes.filter(node => node.hasOwnProperty('nodes')).map(n => <Graph> n)
+        let nongraph_nodes = nodes.filter(node => !node.hasOwnProperty('nodes'))
+
+        return { nodes: nongraph_nodes, graphs: graphs }
     }
 
     private mergeAliases(nodes: Array<Node>): Array<Node> {
@@ -237,8 +258,31 @@ export class Session {
         return state_to_field_val_funs
     }
 
+    private connectNodesToGraphs(nodes: Array<Node>, graphs: Array<Graph>): void {
+        let rel_name = this.setIncludesRelationName()
+        let rel = this.getEntryByName(rel_name)
+        if (!rel) {
+            Logger.warn(`the model does not contain the expected relation '${rel_name}'`)
+            return
+        }
+        if (rel.type !== 'map_entry') {
+            throw `set-in relation '${rel_name}' is expected to be of type 'map_entry'`
+        }
+        graphs.forEach(graph => {
+            nodes.forEach(node => {
+                let val = this.appleEntry(rel!, [graph.val, node.val])
+                if (this.isInnerValueTrue(val)) {
+                    // this node belongs to this graph
+                    graph.nodes.push(node)
+                }
+            })
+        })
+    }
+
     public produceGraphModel(): GraphModel {
-        let nodes = this.collectGraphNodes()
+        let {nodes, graphs} = this.collectGraphsAndNodes()
+
+        this.connectNodesToGraphs(nodes, graphs)
 
         let equivalence_classes = this.collectEquivClasses(nodes)
 
@@ -246,10 +290,8 @@ export class Session {
 
         let fields = this.collectFields(nonAliasingNodes.filter(node => node.type && node.type.typename === 'Ref'))
         
-        // let graph = new Graph('G', nonAliasingNodes.map(n => n.id))
-        
         // TODO: edges, paths
-        this.graphModel = new GraphModel(this.states!, /*graph,*/ nonAliasingNodes, fields, [], [], equivalence_classes)  
+        this.graphModel = new GraphModel(this.states!, graphs, nonAliasingNodes, fields, [], [], equivalence_classes)  
 
         return this.graphModel!
     }
@@ -261,7 +303,7 @@ export class Session {
         query.states.forEach(state_name => state_name_hash.set(state_name, undefined))
 
         let filtered_fields = this.graphModel!.fields.filter(field => state_name_hash.has(field.state.name))
-        this.latestQuery = new GraphModel([], [], [], [], [], new EquivClasses())
+        this.latestQuery = new GraphModel([], [], [], [], [], [], new EquivClasses())
         Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
         
@@ -383,10 +425,6 @@ export class Session {
             } 
         }
     }
-
-    private getEntriesViaRegExp(pattern: RegExp): Array<[string, ModelEntry]> {
-        return Object.entries(this.model!).filter(pair => pattern.test(pair[0]))
-    }
     
     /** Backend-specific code */
 
@@ -457,6 +495,39 @@ export class Session {
 
     private fieldLookupRelationName(fname: string): string {
         return this.isCarbon() ? '[3]' : `$FVF.lookup_${fname}`
+    }
+
+    private setIncludesRelationName(): string {
+        return this.isCarbon() ? '[2]' : 'Set_in'
+    }
+
+    private isInnerValueTrue(innerval: string): boolean {
+        if (innerval === 'true') {
+            return true
+        }
+        if (innerval === 'false') {
+            return false
+        }
+        if (this.isCarbon()) {
+            let typ = this.getInnerValueType(innerval)
+            if (typ.typename !== 'Bool') {
+                throw `cannot parse value '${innerval}' as Boolean`
+            }
+            let U_2_bool = this.getEntryByName('U_2_bool')
+            if (!U_2_bool) {
+                throw `cannot interpret value '${innerval}' of uninterpreted type to Boolean: model does not define 'U_2_bool'`
+            }
+            let bool_str = this.appleEntry(U_2_bool, [innerval])
+            if (bool_str !== 'true' && bool_str !== 'false') {
+                throw `cannot parse value '${bool_str}' as Boolean`
+            }
+            return bool_str === 'true'
+        } else {
+            if (innerval !== 'true' && innerval !== 'false') {
+                throw `cannot parse value '${innerval}' as Boolean`
+            }
+            return innerval === 'true'
+        }
     }
 
     private fieldNodeValue(fname: string): string | undefined {
