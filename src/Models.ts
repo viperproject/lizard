@@ -90,9 +90,9 @@ export class Node {
     /** This dynamic field enables JSONFormatter to pretty pront the node. */
     private _: string 
 
-    public repr(): string {
+    public repr(withoutType=false): string {
         let readable_name = Array.isArray(this.aliases) ? `${this.aliases.join(' = ')}` : this.aliases
-        if (this.type) {
+        if (!withoutType && this.type) {
             return `${readable_name}: ${this.type.typename} = ${this.val}`
         } else {
             return `${readable_name} = ${this.val}`
