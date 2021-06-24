@@ -72,6 +72,10 @@ export function isRef(type: ViperType): boolean {
     return type.typename === 'Ref'
 }
 
+export function isSetOfRefs(type: ViperType): boolean {
+    return type.typename === 'Set[Ref]'
+}
+
 class SetType implements ViperType {
     typename: string
     constructor(readonly type_arg: ViperType) {

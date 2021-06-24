@@ -1,5 +1,5 @@
 import { Logger } from "./logger"
-import { PrimitiveTypes, PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, FunctionValue } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -40,24 +40,29 @@ export class Session {
         return next_node_id
     }
 
-    private mkNode(name: string, innerval: string, proto: string | undefined = undefined): Node {
+    private mkNode(name: string, innerval: string, 
+                   type: ViperType | undefined = undefined, proto: string | undefined = undefined): Node {
+
         // Special case the null node
         if (name === this.nullNodeName()) {
             this.null_node = new GraphNode([name], true, this.freshNodeId(), innerval, proto)
             return this.null_node!
         }
-        
-        let typ = this.viperTypes!.get(name)
-        if (!typ) {
-            Logger.warn(`no type information for ${name} = ${innerval}`)
-            typ = PolymorphicTypes.Other(innerval)
+        if (!type) {
+            // If type is not provided, try to retrieve it from available program definitions
+            type = this.viperTypes!.get(name)
+            if (!type) {
+                // Fallback to Other type
+                Logger.warn(`no type information for ${name} = ${innerval}`)
+                type = PolymorphicTypes.Other(innerval)
+            }
         }
-        if (typ.typename === 'Set[Ref]') {
+        if (type.typename === 'Set[Ref]') {
             return new Graph([], [name], this.freshNodeId(), innerval, proto)
-        } else if (typ && typ.typename === 'Ref') {
+        } else if (type && type.typename === 'Ref') {
             return new GraphNode([name], false, this.freshNodeId(), innerval, proto)
         } else {
-            return new Node([name], typ, this.freshNodeId(), innerval, proto)
+            return new Node([name], type, this.freshNodeId(), innerval, proto)
         }
     }
 
@@ -124,7 +129,8 @@ export class Session {
 
     private atoms: Array<Node> | undefined = undefined
     public states: Array<State> | undefined = undefined 
-    private extended_equiv_classes: EquivClasses | undefined = undefined
+    private extended_equiv_classes = new EquivClasses()
+    private transitive_nodes = new Map<number, Node>()
 
     private latestQuery: GraphModel | undefined = undefined 
     private graphModel: GraphModel | undefined = undefined
@@ -162,8 +168,6 @@ export class Session {
             // e.g. "X@1" is an inner name for the prototype "X"
             (innername: string) => this.innerToProto(this.isCarbon(), innername))  
 
-        // this.precomputeViperTypesFromModel()
-
         // 1. Collect program states 
         this.states = this.collectStates()
 
@@ -181,24 +185,22 @@ export class Session {
         })
 
         // 3. Compute equivalence classes amongst all atoms
-        this.extended_equiv_classes = this.collectEquivClasses(this.atoms!)
+        this.collectEquivClasses(this.atoms!, this.extended_equiv_classes)
     }
 
-    private collectEquivClasses(nodes: Array<Node>): EquivClasses {
-        let res: EquivClasses = new EquivClasses()
+    private equiv_classes = new EquivClasses()
 
+    private collectEquivClasses(nodes: Array<Node>, ec: EquivClasses): void {
         nodes.forEach(node => {
-            if (res.hasOwnProperty(node.val)) {
-                res[node.val].push(node)
+            if (ec.hasOwnProperty(node.val)) {
+                ec[node.val].push(node)
             } else {
-                res[node.val] = [node]
+                ec[node.val] = [node]
             }
         })
-
-        return res
     }
 
-    private collectGraphsAndNodes(): { graphs: Array<Graph>, nodes: Array<Node> } {
+    private collectGraphsAndNodes(): Array<Node> {
         
         let names = this.getDefinitionNames('Local')
                     .concat(this.getDefinitionNames('Argument'))
@@ -226,33 +228,34 @@ export class Session {
         }
 
         // Filter old versions of variables in case the encoding uses SSA
-        atoms = this.extractLatestAssignedVars(atoms)
-
-        // Split abstract nodes into Node 
-        let graphs = atoms.filter(node => node.hasOwnProperty('nodes')).map(n => <Graph> n)
-        let nodes = atoms.filter(node => !node.hasOwnProperty('nodes'))
-
-        return { graphs: graphs, nodes: nodes }
+        return this.extractLatestAssignedVars(atoms)
     }
 
+    // map from inner values to nodes
+    private nonAliasingNodesMap = new Map<string, Node>()
+
     private mergeAliases(nodes: Array<Node>): Array<Node> {
-        let nonAliasingNodesMap = new Map<string, Node>()  // map from inner values to nodes
+
+        let new_nonaliasing_node = new Array<Node>()
 
         nodes.forEach(node => {
             let innerval = node.val
-            if (nonAliasingNodesMap.has(innerval)) {
+            if (this.nonAliasingNodesMap.has(innerval)) {
                 // We already have a representative for this node inner value
-                let na_node = nonAliasingNodesMap.get(innerval)!
+                let na_node = this.nonAliasingNodesMap.get(innerval)!
                 if (node.aliases.length > 1) {
                     throw `aliasing node ${JSON.stringify(node)} is expected to have only one internal name`
                 }
                 na_node.aliases.push(node.aliases[0])
+                new_nonaliasing_node.push(na_node)
             } else {
-                nonAliasingNodesMap.set(innerval, node)
+                // This is a new node inner value
+                this.nonAliasingNodesMap.set(innerval, node)
+                new_nonaliasing_node.push(node)
             }
         })
 
-        return Array.from(nonAliasingNodesMap.values())
+        return new_nonaliasing_node
     }
 
     private collectFields(nodes: Array<GraphNode>): Array<Relation> {
@@ -283,7 +286,7 @@ export class Session {
         return state_to_field_val_funs
     }
 
-    private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Array<Graph>): void {
+    private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Set<Graph>): void {
         let rel_name = this.setIncludesRelationName()
         let rel = this.getEntryByName(rel_name)
         if (!rel) {
@@ -304,45 +307,74 @@ export class Session {
         })
     }
 
-    private node_hash: Map<number, Node> | undefined = undefined
+    private node_hash = new Map<number, Node>()
+    private graphs = new Set<Graph>()
+    
+    private graph_nodes = new Array<GraphNode>()
+    private scalar_nodes = new Array<Node>()
+    private fields = new Array<Relation>()
 
-    public produceGraphModel(): GraphModel {
-        // A. Collect all the clearly relevant nodes
-        let {graphs, nodes} = this.collectGraphsAndNodes()
+    private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1) {
+        Logger.info(`iteration №${iteration} of analyzing the heap model`)
         
-        // B. Hash all nodes for easy access
-        this.node_hash = new Map<number, Node>()
-        nodes.concat(graphs).forEach(generic_node => this.node_hash!.set(generic_node.id, generic_node))
-        
-        // C. Merge aliases based on equivalent classes
-        let equivalence_classes = this.collectEquivClasses(nodes)
-        let non_aliasing_nodes = this.mergeAliases(nodes)
-        
-        // D. Split nodes into Ref-typed and all others
-        let graph_nodes = new Array<GraphNode>()
-        let scalar_nodes = new Array<Node>()
-        non_aliasing_nodes.forEach(node => {
-            if (node.type && node.type.typename === 'Ref') {
-                graph_nodes.push(<GraphNode> node)
+        // A. Update hash s.t. nodes can be retrieved efficiently, via their IDs
+        starting_atoms.forEach(node => {
+            if (this.node_hash.has(node.id)) {
+                throw `saturation error: node with ID ${node.id} is already present in the node hash`
+            }
+            this.node_hash.set(node.id, node)
+        })
+
+        // B. Deduce and merge aliasing nodes 
+        this.collectEquivClasses(starting_atoms, this.equiv_classes)
+        let new_nonaliasing_node = this.mergeAliases(starting_atoms)
+
+        // C. Split nodes into Ref-typed and all others
+        let new_graph_nodes = new Array<GraphNode>()
+        new_nonaliasing_node.forEach(node => {
+            if (node.type && isRef(node.type)) {
+                new_graph_nodes.push(<GraphNode> node)
+            } else if (node.type && isSetOfRefs(node.type)) {
+                this.graphs.add(<Graph> node)
             } else {
-                scalar_nodes.push(node)
+                this.scalar_nodes.push(node)
+            }
+        })
+        this.graph_nodes.push(...new_graph_nodes)
+
+        // D. Determine which Ref-based nodes belong to which graphs (i.e. Set[Ref]-based nodes)
+        this.connectNodesToGraphs(new_graph_nodes, this.graphs)
+
+        // E. Collect information about fields  
+        let new_fields = this.collectFields(new_graph_nodes)
+        this.fields.push(...new_fields)
+
+        // F. Some of the fields may lead to new nodes that must be encountered for in the model. 
+        let trans_nodes = new Set<Node>()
+        new_fields.forEach(field => {
+            if (!this.node_hash.has(field.succ_id)) { 
+                let trans_node = this.transitive_nodes.get(field.succ_id)!
+                trans_nodes.add(trans_node)
             }
         })
 
-        // E. Determine which Ref-based nodes belong to which graphs (Set[Ref]-based nodes)
-        this.connectNodesToGraphs(graph_nodes, graphs)
-        
-        // F. Collect the fields information 
-        let fields = this.collectFields(graph_nodes)
+        // G. Saturate! 
+        if (trans_nodes.size > 0) {
+            this.produceGraphModelRec(Array.from(trans_nodes), iteration+1)
+        }
 
-        // G. Some of the fields may lead to new nodes that must be encountered for in the model. 
-        let new_nodes = fields.filter(field => !this.node_hash!.has(field.succ_id)).map(field => this.node_hash!.get(field.succ_id))
-        // TODO: implement saturation 
-        
-        // TODO: edges, paths
-        this.graphModel = new GraphModel(this.states!, graphs, graph_nodes, scalar_nodes, 
-                                         fields, [], [], equivalence_classes)
+        // H. Return model
+        this.graphModel = new GraphModel(this.states!, Array.from(this.graphs), this.graph_nodes, this.scalar_nodes, 
+                                         this.fields, [], [], this.equiv_classes)
+
         return this.graphModel!
+    }
+
+    public produceGraphModel(): GraphModel {
+        // O. Collect initial nodes
+        let starting_atoms = this.collectGraphsAndNodes()
+        // I. Process and Saturate! 
+        return this.produceGraphModelRec(starting_atoms)
     }
 
     public applyQuery(query: Query): GraphModel {
@@ -425,8 +457,8 @@ export class Session {
         return (state: State) => {
             let succ_innerval = simple_fun(state.val)
             let succ: Node
-            if (this.extended_equiv_classes!.hasOwnProperty(succ_innerval)) {
-                let succs = this.extended_equiv_classes![succ_innerval]
+            if (this.extended_equiv_classes.hasOwnProperty(succ_innerval)) {
+                let succs = this.extended_equiv_classes[succ_innerval]
                 if (succs.length > 1) {
                     Logger.warn(`multiple values are possible for ${node.aliases}.${fname}; ` + 
                                 `perhaps there are multiple program states involved?`)
@@ -435,9 +467,11 @@ export class Session {
             } else {
                 // this is a fresh value; create a new atom to support it
                 let name = `${node.aliases}.${fname}`
-                Logger.warn(`no atom found for value ${succ_innerval} of ${name} in state ${state.name}`)
-                succ = this.mkNode(name, succ_innerval)
-                this.extended_equiv_classes![succ_innerval] = new Array<Node>(succ)
+                let type = this.viperTypes!.get(fname)
+                succ = this.mkNode(name, succ_innerval, type)
+                Logger.info(`no atom found for value ${succ_innerval} of ${name}; adding transitive node with id ${succ.id}`)
+                this.extended_equiv_classes[succ_innerval] = new Array<Node>(succ)
+                this.transitive_nodes.set(succ.id, succ)
             }
             return succ
         }
