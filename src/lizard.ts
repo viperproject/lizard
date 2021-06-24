@@ -57,7 +57,7 @@ export namespace Lizard {
             panel!.emitRefinedModel(graph_model)
             Logger.info(`✓ processed query ${JSON.stringify(query)}`)
 
-            panel!.renderGraph(new DotGraph(graph_model))
+            panel!.renderGraph(new DotGraph(graph_model, session!.isCarbon()))
             Logger.info(`✓ rendered the graph model. enjoy!`)
         }
         
@@ -105,7 +105,8 @@ export namespace Lizard {
             Logger.info(`✓ prepared the graph model`)
             
             // Step 3 -- visualization
-            panel!.renderGraph(new DotGraph(graphModel))
+            let dot = new DotGraph(graphModel, session!.isCarbon())
+            panel!.renderGraph(dot)
             Logger.info(`✓ rendered the graph model. enjoy!`)
         })
     }

@@ -47,7 +47,9 @@ button:hover:not(:disabled) {
     cursor: pointer;
 }
 
-nav {
+#nav {
+    height: 80px;
+
     div#navRight {
         float: right;
     }
@@ -81,80 +83,6 @@ nav {
     cursor: pointer;
     text-decoration: underline;
 }
-/*
-#navigation {
-    ul {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    }
-    span {
-        display: inline-block;
-        padding: 1px 2px;
-        border-radius: 2px;
-    }
-    span.stateLink:hover {
-        cursor: pointer;
-        background-color: #A66321;
-    }
-    pre {
-        margin: 0;
-        margin-left: 1em;
-        display: inline-block;
-        white-space: pre-wrap;
-    }
-    #current > span {
-        background-color: #114215;
-    }
-    .nested {
-        padding-left: 1.5em;
-        li:before {
-            content: '▸ '
-        }
-        // li:not(last-child):before {
-        //     content: '┣━  ';
-        // }
-        // li:last-child:before {
-        //     content: '┗━  ';
-        // }
-    }
-    .childrenNumber {
-        //color: #444444;
-        margin-left: 1em;
-    }
-}
-
-#currentState {
-    h3 {
-        margin-top: 0;
-
-        pre {
-            display: inline;
-            background: #2A3239;
-            margin-left: 1em;
-            padding: 1px 4px;
-        }
-    }
-
-    > h4 {
-        margin-bottom: 0.8em;
-    }
-
-    > pre {
-        margin: 0em 0.5em;
-        padding: 0.4em;
-        background: #2A3239;
-        white-space: pre-wrap;
-        > span {
-            padding: 1px 2px;
-        }
-
-        > span.highlighted {
-            background-color: #A66321;
-            border-radius: 2px;
-        }
-    }
-}*/
 
 pre.json {
     padding: 1em;
@@ -193,12 +121,12 @@ div.graphMessage {
     //color: #444444;
 }
 
-.panel {
-    overflow: auto;
+.noScroll {
+    overflow: hidden;
 }
 
-.panel.noScroll {
-    overflow: hidden;
+.scroll {
+    overflow: auto;
 }
 
 .panel > * {
@@ -210,14 +138,15 @@ h3 {
 }
 
 .gutter.gutter-vertical {
-    background: #303030;
+    // background: #303030;
+    background-color: #dddddd;
     cursor: row-resize;
 }
 
 .gutter:hover,
 .gutter.dragged
  {
-    background: #4aa2e0;
+    background: #aaaaaa;
  }
 
  #diagnostics > section {

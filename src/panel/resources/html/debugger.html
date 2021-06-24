@@ -201,28 +201,11 @@
     <title>Viper Debugger</title>
 </head>
 <body>
-    <header>
-        <nav>
-            <select id="programStates" multiple size="4" disabled></select>
-            <!--button id="parent" name="parent" type="button">Parent</button>
-            <button id="child" name="child" type="button">Child</button>
-            <button id="previous" name="previous" type="button">Previous</button>
-            <button id="next" name="next" type="button">Next</button-->
-            <!--div id="navRight">
-                <input type="checkbox" id="mouseNavigation" name="mouseNavigation" checked="true">
-                <label for="mouseNavigation">Mouse Navigation</label>
-            </div-->
-        </nav>
-    </header>
-    <div id="graphPanel" class="panel">
-      <!-- <div id="graph" style="text-align: center;"></div> -->
+    <div id="nav" class="panel noScroll">
+        <select id="programStates" multiple size="4" disabled></select>
     </div>
-    <!-- <div id="mainPanel" class="panel">
-        <h3>Heap Graph</h3>
-        <div id="navigation"></div>
-        <div id="currentState"></div>
-    </div> -->
-    <div id="diagnostics" class="panel">
+    <div id="graphPanel" class="panel noScroll"></div>
+    <div id="diagnostics" class="panel scroll">
         <h3>Diagnostics</h3>
         <section>
             <h4>Graph Model</h4>

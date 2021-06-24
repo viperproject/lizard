@@ -1,5 +1,5 @@
 import { Logger } from "./logger"
-import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph } from "./Models"
+import { PrimitiveTypes, PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, FunctionValue } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -41,26 +41,25 @@ export class Session {
     }
 
     private mkNode(name: string, innerval: string, proto: string | undefined = undefined): Node {
-        // Internal nodes might be of unknown type
+        // Special case the null node
+        if (name === this.nullNodeName()) {
+            this.null_node = new GraphNode([name], true, this.freshNodeId(), innerval, proto)
+            return this.null_node!
+        }
+        
         let typ = this.viperTypes!.get(name)
-        if (typ && typ.typename === 'Set[Ref]') {
-            return new Graph(new Array<Node>(), name, typ, this.freshNodeId(), innerval, proto)
+        if (!typ) {
+            Logger.warn(`no type information for ${name} = ${innerval}`)
+            typ = PolymorphicTypes.Other(innerval)
+        }
+        if (typ.typename === 'Set[Ref]') {
+            return new Graph([], [name], this.freshNodeId(), innerval, proto)
+        } else if (typ && typ.typename === 'Ref') {
+            return new GraphNode([name], false, this.freshNodeId(), innerval, proto)
         } else {
-            return new Node(name, typ, this.freshNodeId(), innerval, proto)
+            return new Node([name], typ, this.freshNodeId(), innerval, proto)
         }
     }
-
-    /** Creates and returnes a new node the fields of which are identical to the given node, except: 
-     *  (1) the 'name' field is set to a singleton array containing the name
-     *  (2) the 'id' field is picked freshly
-     *  This is useful in aliasing resolution. 
-     */
-    private copyVectorizeNode(node: Node): Node {
-        if (Array.isArray(node.aliases)) {
-            throw `cannot vectorize a node the 'name' field of which is already an array`
-        }
-        return new Node(new Array(node.aliases), node.type, this.freshNodeId(), node.val, node.proto)
-    } 
 
     // static myRelations = ['[2]', '[3]', '[4:=]', 
     //                       'exists_path_', 'exists_path', 
@@ -130,12 +129,40 @@ export class Session {
     private latestQuery: GraphModel | undefined = undefined 
     private graphModel: GraphModel | undefined = undefined
 
+    private null_node: GraphNode | undefined = undefined
+
+    static unary_ops = new Set<string>(['-', '+', '!'])
+    static binary_ops = new Set<string>(['-', '+', '*', '/', 'and', 'or'])
+
+    static serializeEntryValue(entry: ModelEntry): string {
+        if (entry.type === 'constant_entry') {
+            return (<ConstantEntry> entry).value
+        } else if (entry.type === 'application_entry') { 
+            let app_entry = (<ApplicationEntry> entry)
+            let fun = app_entry.value.name
+            let args = app_entry.value.args
+            if (args.length === 1 && Session.unary_ops.has(fun)) {
+                // Unary function
+                return fun + Session.serializeEntryValue(args[0])
+            } else if (args.length === 2 && Session.binary_ops.has(fun)) {
+                // Binary function
+                return Session.serializeEntryValue(args[0]) + fun + Session.serializeEntryValue(args[1])
+            } else {
+                // Other function
+                return `${fun}(${args.map(arg => Session.serializeEntryValue(arg)).join(', ')})`
+            }
+        } else {
+            throw `serialization of map entry values is not supported`
+        }
+    }
+
     public preProcessRawModel(): void {
         // 0. Collect type information
         this.viperTypes = new ViperTypesProvider(this.programDefinitions!, 
             // e.g. "X@1" is an inner name for the prototype "X"
             (innername: string) => this.innerToProto(this.isCarbon(), innername))  
-        this.precomputeViperTypesFromModel()
+
+        // this.precomputeViperTypesFromModel()
 
         // 1. Collect program states 
         this.states = this.collectStates()
@@ -144,11 +171,12 @@ export class Session {
         this.atoms = new Array<Node>()
         Object.entries(this.model!).forEach(pair => {
             let name = pair[0]
-            let constant_entry = pair[1]
-            if (constant_entry.type === 'constant_entry') {
-                let innerval = (<ConstantEntry> constant_entry).value
-                let new_node = this.mkNode(name, innerval)
-                this.atoms!.push(new_node)
+            let entry = pair[1]
+            
+            if (entry.type === 'constant_entry' || entry.type == 'application_entry') {
+                let innerval = Session.serializeEntryValue(entry)
+                let node = this.mkNode(name, innerval)
+                this.atoms!.push(node)
             }
         })
 
@@ -170,7 +198,7 @@ export class Session {
         return res
     }
 
-    private collectGraphsAndNodes(): { nodes: Array<Node>, graphs: Array<Graph> } {
+    private collectGraphsAndNodes(): { graphs: Array<Graph>, nodes: Array<Node> } {
         
         let names = this.getDefinitionNames('Local')
                     .concat(this.getDefinitionNames('Argument'))
@@ -178,12 +206,13 @@ export class Session {
                     .concat(this.nullNodeName())
 
         // Find atoms that define graph nodes
-        let nodes = names.flatMap(proto => 
+        let atoms = names.flatMap(proto => 
             this.atoms!.filter(atom => {
-                let atom_name = atom.aliases
-                if (Array.isArray(atom_name)) {
-                    throw `each node shoudl have one internal name at this point`
+                if (atom.aliases.length > 1) {
+                    throw `each node should have one internal name at this point, ` + 
+                          `but ${JSON.stringify(atom)} has more.`
                 }
+                let atom_name = atom.aliases[0]
                 return this.isPrototypeOf(proto, atom_name)
             }).map(atom => {
                     // Set the prototype variable for this atom
@@ -192,18 +221,18 @@ export class Session {
                 }))
 
         // Check that all expected nodes are defined in each state
-        if (nodes.length < names.length) {
+        if (atoms.length < names.length) {
             Logger.warn(`could not find definitions for some graph nodes in raw model`)
         }
 
         // Filter old versions of variables in case the encoding uses SSA
-        nodes = this.extractLatestAssignedVars(nodes)
+        atoms = this.extractLatestAssignedVars(atoms)
 
         // Split abstract nodes into Node 
-        let graphs = nodes.filter(node => node.hasOwnProperty('nodes')).map(n => <Graph> n)
-        let nongraph_nodes = nodes.filter(node => !node.hasOwnProperty('nodes'))
+        let graphs = atoms.filter(node => node.hasOwnProperty('nodes')).map(n => <Graph> n)
+        let nodes = atoms.filter(node => !node.hasOwnProperty('nodes'))
 
-        return { nodes: nongraph_nodes, graphs: graphs }
+        return { graphs: graphs, nodes: nodes }
     }
 
     private mergeAliases(nodes: Array<Node>): Array<Node> {
@@ -214,17 +243,11 @@ export class Session {
             if (nonAliasingNodesMap.has(innerval)) {
                 // We already have a representative for this node inner value
                 let na_node = nonAliasingNodesMap.get(innerval)!
-                if (!Array.isArray(na_node.aliases)) {
-                    throw `expected type Array for field 'aliases' of Node object ${JSON.stringify(na_node)}`
+                if (node.aliases.length > 1) {
+                    throw `aliasing node ${JSON.stringify(node)} is expected to have only one internal name`
                 }
-                if (Array.isArray(node.aliases)) {
-                    throw `aliasing node ${JSON.stringify(node)} is expected to have only one (scalar) internal name`
-                }
-                na_node.aliases.push(node.aliases)
+                na_node.aliases.push(node.aliases[0])
             } else {
-                // Vectorize the aliases of this node
-                node.aliases = new Array<string>(<string> node.aliases)
-                
                 nonAliasingNodesMap.set(innerval, node)
             }
         })
@@ -232,7 +255,7 @@ export class Session {
         return Array.from(nonAliasingNodesMap.values())
     }
 
-    private collectFields(nodes: Array<Node>): Array<Relation> {
+    private collectFields(nodes: Array<GraphNode>): Array<Relation> {
         let fnames = this.getDefinitionNames('Field')
 
         // Check if the method containing the failed assertion uses any fields at all
@@ -249,16 +272,18 @@ export class Session {
         let state_to_field_val_funs = fnames.flatMap(fname => 
             nodes.flatMap(node => {
                 let state_to_rels = this.collectFieldValueInfo(node, fname)
-                return this.states!.map(state => {
+                let rels = this.states!.map(state => {
                     let adj_node = state_to_rels(state)
-                    return new Relation(fname, state, node, adj_node)
+                    return new Relation(fname, state, node.id, adj_node.id)
                 })
+                node.fields = rels
+                return rels
             }))
 
         return state_to_field_val_funs
     }
 
-    private connectNodesToGraphs(nodes: Array<Node>, graphs: Array<Graph>): void {
+    private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Array<Graph>): void {
         let rel_name = this.setIncludesRelationName()
         let rel = this.getEntryByName(rel_name)
         if (!rel) {
@@ -270,7 +295,7 @@ export class Session {
         }
         graphs.forEach(graph => {
             nodes.forEach(node => {
-                let val = this.appleEntry(rel!, [graph.val, node.val])
+                let val = Session.appleEntry(rel!, [graph.val, node.val])
                 if (this.isInnerValueTrue(val)) {
                     // this node belongs to this graph
                     graph.nodes.push(node)
@@ -279,20 +304,44 @@ export class Session {
         })
     }
 
+    private node_hash: Map<number, Node> | undefined = undefined
+
     public produceGraphModel(): GraphModel {
-        let {nodes, graphs} = this.collectGraphsAndNodes()
-
-        this.connectNodesToGraphs(nodes, graphs)
-
+        // A. Collect all the clearly relevant nodes
+        let {graphs, nodes} = this.collectGraphsAndNodes()
+        
+        // B. Hash all nodes for easy access
+        this.node_hash = new Map<number, Node>()
+        nodes.concat(graphs).forEach(generic_node => this.node_hash!.set(generic_node.id, generic_node))
+        
+        // C. Merge aliases based on equivalent classes
         let equivalence_classes = this.collectEquivClasses(nodes)
+        let non_aliasing_nodes = this.mergeAliases(nodes)
+        
+        // D. Split nodes into Ref-typed and all others
+        let graph_nodes = new Array<GraphNode>()
+        let scalar_nodes = new Array<Node>()
+        non_aliasing_nodes.forEach(node => {
+            if (node.type && node.type.typename === 'Ref') {
+                graph_nodes.push(<GraphNode> node)
+            } else {
+                scalar_nodes.push(node)
+            }
+        })
 
-        let nonAliasingNodes = this.mergeAliases(nodes)
+        // E. Determine which Ref-based nodes belong to which graphs (Set[Ref]-based nodes)
+        this.connectNodesToGraphs(graph_nodes, graphs)
+        
+        // F. Collect the fields information 
+        let fields = this.collectFields(graph_nodes)
 
-        let fields = this.collectFields(nonAliasingNodes.filter(node => node.type && node.type.typename === 'Ref'))
+        // G. Some of the fields may lead to new nodes that must be encountered for in the model. 
+        let new_nodes = fields.filter(field => !this.node_hash!.has(field.succ_id)).map(field => this.node_hash!.get(field.succ_id))
+        // TODO: implement saturation 
         
         // TODO: edges, paths
-        this.graphModel = new GraphModel(this.states!, graphs, nonAliasingNodes, fields, [], [], equivalence_classes)  
-
+        this.graphModel = new GraphModel(this.states!, graphs, graph_nodes, scalar_nodes, 
+                                         fields, [], [], equivalence_classes)
         return this.graphModel!
     }
 
@@ -303,7 +352,7 @@ export class Session {
         query.states.forEach(state_name => state_name_hash.set(state_name, undefined))
 
         let filtered_fields = this.graphModel!.fields.filter(field => state_name_hash.has(field.state.name))
-        this.latestQuery = new GraphModel([], [], [], [], [], [], new EquivClasses())
+        this.latestQuery = new GraphModel()
         Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
         
@@ -394,16 +443,16 @@ export class Session {
         }
     }
 
-    private getAtomsByInnerVal(innerval: string): Array<Node> {
-        return this.atoms!.filter(atom => atom.val === innerval)
-    }
+    // private getAtomsByInnerVal(innerval: string): Array<Node> {
+    //     return this.atoms!.filter(atom => atom.val === innerval)
+    // }
 
-    private appleEntry(entry: ModelEntry, args: Array<string>): string {
+    static appleEntry(entry: ModelEntry, args: Array<string>): string {
         if (entry.type === 'constant_entry') {
             let const_entry = <ConstantEntry> entry
             return const_entry.value
-        } else if (entry.type === 'function_entry') {
-            throw `entries of type 'function_entry' are not yet supported`
+        } else if (entry.type === 'application_entry') {
+            throw `entries of type 'application_entry' are not yet supported`
         } else {
             let map_entry = <MapEntry> entry
             let res_entry_maybe = map_entry.cases.find(map_case => {
@@ -509,15 +558,11 @@ export class Session {
             return false
         }
         if (this.isCarbon()) {
-            let typ = this.getInnerValueType(innerval)
-            if (typ.typename !== 'Bool') {
-                throw `cannot parse value '${innerval}' as Boolean`
-            }
             let U_2_bool = this.getEntryByName('U_2_bool')
             if (!U_2_bool) {
                 throw `cannot interpret value '${innerval}' of uninterpreted type to Boolean: model does not define 'U_2_bool'`
             }
-            let bool_str = this.appleEntry(U_2_bool, [innerval])
+            let bool_str = Session.appleEntry(U_2_bool, [innerval])
             if (bool_str !== 'true' && bool_str !== 'false') {
                 throw `cannot parse value '${bool_str}' as Boolean`
             }
@@ -567,143 +612,6 @@ export class Session {
         }
     }
 
-    // PRECOMPUTE
-
-    private carbon_type: ((value: string) => ViperType) | undefined = undefined
-    private silicon_type: ((value: string) => ViperType) | undefined = undefined
-
-    private precomputeViperTypesFromCarbonModel() {
-        let carbon_type_map = new Map<string, ViperType>()
-            
-        // Refs
-        let ref_type_val = getConstantEntryValue(this.model!.RefType)
-        carbon_type_map.set(ref_type_val, new RefType(ref_type_val))
-        
-        // Bools
-        let bool_type_val = getConstantEntryValue(this.model!.boolType)
-        carbon_type_map.set(bool_type_val, new BoolType(bool_type_val))
-    
-        // Ints
-        let int_type_val = getConstantEntryValue(this.model!.intType)
-        carbon_type_map.set(int_type_val, new IntType(int_type_val))
-    
-        // Perms are represented as doubles
-        let float_type_val = 'Float'
-        carbon_type_map.set(float_type_val, new PermType())
-    
-        // Sets
-        let map_type_entries = this.getEntriesViaRegExp(/MapType\d+Type/)  // FIXME
-        // map_type_entries.map(map_type_entry => {})
-        // let set_of_refs_type_val = this.appleEntry(this.model!.)
-    
-        this.carbon_type = (value: string) => {
-            let int_rep = parseInt(value)
-            let float_rep = parseInt(value)
-            if (float_rep === float_rep) {
-                // value is a number; is it an int or a float? 
-                if (float_rep === int_rep) {
-                    // this is an int (we must have it in the cache)
-                    let typ = carbon_type_map.get(int_type_val)!
-                    return typ
-                } else {
-                    // this is a float; create a new type instance for each float
-                    let typ = carbon_type_map.get(float_type_val)!
-                    return typ
-                }
-            } else {
-                // value is not a number
-                if (carbon_type_map.has(value)) {
-                    let typ = carbon_type_map.get(value)!
-                    return typ
-                } else {
-                    let new_type = new OtherType(value)
-                    carbon_type_map.set(value, new_type)
-                    return new_type
-                }
-            }
-        }
-    }
-    
-    private precomputeViperTypesFromSiliconModel() {
-        // FIXME: default types are never cached
-    
-        let silicon_type_cache = new Map<string, ViperType>()
-    
-        let viper_Bool_type = new BoolType()
-        silicon_type_cache.set("true", viper_Bool_type)
-        silicon_type_cache.set("false", viper_Bool_type)
-    
-        silicon_type_cache.set("$Snap.unit", new OtherType("$Snap.unit"))
-    
-        let viper_Int_type = new IntType()
-        let viper_Ref_type = new RefType()
-        let viper_Perm_type = new PermType()
-    
-        silicon_type_cache.set("$Ref", viper_Ref_type)
-        silicon_type_cache.set("Set<$Ref>", new SetType(undefined, viper_Ref_type))
-    
-        this.silicon_type = (value: string) => {
-            if (silicon_type_cache.has(value)) {
-                let typ = silicon_type_cache.get(value)!
-                return typ
-            } else {
-                let int_rep = parseInt(value)
-                let float_rep = parseInt(value)
-                if (float_rep !== float_rep) {
-                    // Non-numeric value (uninterpreted)
-                    let m = value.match(/(.*)!val!\d+/)
-                    
-                    if (!m || !m[1]) {
-                        throw `cannot deduce value type for '${value}'`
-                    }
-                    let typename = m[1]
-                    if (silicon_type_cache.has(typename)) {
-                        return silicon_type_cache.get(typename)!
-                    } else {
-                        let new_type = new OtherType(typename)
-                        silicon_type_cache.set(typename, new_type)
-                        return new_type
-                    }
-                    
-                } else if (int_rep === float_rep) {
-                    // Integer value
-                    silicon_type_cache.set(value, viper_Int_type)
-                    return viper_Int_type
-                    
-                } else {
-                    // Floating point value (permission amount)
-                    silicon_type_cache.set(value, viper_Perm_type)
-                    return viper_Perm_type
-                }
-            }
-        }
-    }
-    
-    private precomputeViperTypesFromModel() {
-        // Type informtion from the SMT model
-        if (this.isCarbon()) {
-            this.precomputeViperTypesFromCarbonModel()
-        } else {
-            this.precomputeViperTypesFromSiliconModel()
-        }
-    }    
-
-    private getInnerValueType(innerval: string): ViperType {
-        if (this.isCarbon()) {
-            let type_map = (<MapEntry> this.model!.type)
-            let type_val = this.appleEntry(type_map, [innerval])
-            let viper_type = this.carbon_type!(type_val)
-            if (viper_type) {
-                return viper_type
-            } else {
-                // FIXME
-                return {typename: 'UnsupportedType', innerval: '-1'}
-            }
-        } else {
-            return this.silicon_type!(innerval)
-        }
-    }
-
     /* We are interested in verifying the failed assertion --- 
     *   a property of the last reachable state in the trace. 
     *  Since Silicon uses the SSA form, we need to keep only only 
@@ -718,10 +626,11 @@ export class Session {
             let immutable_things = new Array<Node>()
 
             nodes.forEach(node => {
-                let name = node.aliases
-                if (Array.isArray(name)) {
-                    throw `at this point, each node is expected to have only one (skalar) name`
+                let names = node.aliases
+                if (names.length > 1) {
+                    throw `at this point, each node is expected to have only one name`
                 }
+                let name = names[0]
                 let name_struct = this.siliconInnerNameParser(name)
                 let proto = name_struct.proto
                 let index = name_struct.index

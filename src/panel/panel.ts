@@ -2,7 +2,7 @@ import { Logger } from './logger'
 
 import JSONFormatter from 'json-formatter-js'
 
-const Split = require('split-js')
+import Split from 'split.js'
 
 import * as d3 from 'd3-graphviz'
 
@@ -22,87 +22,66 @@ function getSelectValues(select: HTMLSelectElement): Array<string> {
 
     let result = []
     let options = select && select.options
-      
+
     for (let opt, i=0; i < options.length; i ++) {
-      opt = options[i]
-  
-      if (opt.selected) {
-        result.push(opt.value || opt.text)
-      }
+        opt = options[i]
+
+        if (opt.selected) {
+            result.push(opt.value || opt.text)
+        }
     }
 
     return result
-  }
-
-function displayGraph(message: any) {
-
-    let dot = message.text
-
-    // Print the DOT code for debug purposes
-    const pre = document.createElement('pre')
-    pre.classList.add('json')
-    pre.innerText = dot
-
-    const dotGraphSource = domElem('#dotGraphSource')
-    removeAllChildren(dotGraphSource)
-    dotGraphSource.appendChild(pre)
-    
-    const graph = document.createElement('div')
-    graph.id = 'graph'
-
-    const graphPanel = domElem('#graphPanel')
-    removeAllChildren(graphPanel)
-    graphPanel.appendChild(graph)
-    
-    let options = {
-        fit: true, 
-        useWorker: false
-    }
-    Logger.info(`starting graph render...`)
-    d3.graphviz("#graph", options).renderDot(dot)
-    Logger.info(`graph render done.`)
-
-    window.setTimeout(() => graph.style.opacity = '1', 100)
 }
-
 
 /** Sets up the debugger pane */ 
 function activate() {
-    Logger.debug("Setting up debug pane")
+    Logger.debug("Setting up debug pane...")
 
     setupPanelSplits()
     setupMessageHandlers()
     setupInputHandlers()
 
-    Logger.debug("Done setting up debug pane")
+    Logger.debug("...Done setting up debug pane.")
 }
 
 
 /** Sets up the splits in the debug pane.  */
 function setupPanelSplits() {
+    Logger.info("\tSetting up panel splits...")
+
     let panels: HTMLElement[] = [...document.querySelectorAll<HTMLElement>('.panel')!]
 
-    // Determine how many panels are opened by default, so we can compute the size of each open panel
-    let isCollapsed = panels.map(e => e.classList.contains('collapsedByDefault'))
-    // This is basically a fold
-    let numberOfCollapsedPanels = isCollapsed.reduce((tot, collapsed) => collapsed ? tot + 1 : tot, 0)
-    let percentForOpenPanel = 100 / (panels.length - numberOfCollapsedPanels)
-    let sizes = isCollapsed.map(e => e ? 0 : percentForOpenPanel)
+    Logger.info(`panels: ${panels}`)
 
-    Split(panels, {
-        sizes: sizes,
+    // Determine how many panels are opened by default, so we can compute the size of each open panel
+    // let isCollapsed = panels.map(e => e.classList.contains('collapsedByDefault'))
+    // This is basically a fold
+    // let numberOfCollapsedPanels = isCollapsed.reduce((tot, collapsed) => collapsed ? tot + 1 : tot, 0)
+    // let percentForOpenPanel = 100 / (panels.length - numberOfCollapsedPanels)
+    // let sizes = isCollapsed.map(e => e ? 0 : percentForOpenPanel)
+
+    let sizes = panels.map(panel => panel.offsetHeight)
+    let total = sizes.reduce((tot, x) => tot + x)
+    let rel_sizes = sizes.map(size => 100*size/total)
+    Logger.info(`panels have sizes: ${rel_sizes.join('% ')}`)
+
+    Split(['#nav', '#graphPanel', '#diagnostics'], {
+        sizes: rel_sizes,
+        // maxSize: [80, +Infinity, +Infinity], 
+        minSize: 0,
+        snapOffset: 20,  // When a panel is less than this, it closes
         direction: 'vertical',
         cursor: 'row-resize',
-        gutterSize: 5,
-        minSize: 0,
-        snapOffset: 40,  // When a panel is less than this, it closes
+        gutterSize: 10,
     })
-}
 
+    Logger.info("\t...Done setting up panel splits...")
+}
 
 /** Sets up the handlers for messages coming from the extension. */
 function setupMessageHandlers() {
-    Logger.debug("Setting up message handlers")
+    Logger.debug("\tSetting up message handlers...")
 
     // Helper function for setting callbacks
     function on(key: string, callback: (message: any) => void) {
@@ -119,20 +98,7 @@ function setupMessageHandlers() {
     on('renderDotGraph', message => displayGraph(message))
     on('programStates', message => { initProgramStateSelect(message) })
     
-    Logger.debug("Done setting up message handlers.")
-}
-
-function initProgramStateSelect(message: any) {
-    let progStateSelect = <HTMLSelectElement> domElem('select#programStates')
-    let states: Array<{name: string, val: string}> = message.text
-    states.forEach(state => {
-        let item: HTMLOptionElement = document.createElement('option')
-        item.value = state.name
-        item.title = state.val
-        item.label = state.name
-        progStateSelect.add(item)
-    })
-    progStateSelect.disabled = false
+    Logger.debug("\t...Done setting up message handlers.")
 }
 
 function toggleSection(buttonId: string, sectionId: string) {
@@ -148,7 +114,7 @@ function toggleSection(buttonId: string, sectionId: string) {
 // TODO: keyboard events from panel?
 /** Sets up handlers for button events in the debugger pane. */
 function setupInputHandlers() {
-    Logger.debug("Setting up input handlers.")
+    Logger.debug("\tSetting up input handlers...")
 
     domElem('button#toggleGraphModel').onclick = () => 
         toggleSection('button#toggleGraphModel', '#graphModel')
@@ -179,7 +145,7 @@ function setupInputHandlers() {
         }
     }
    
-    Logger.debug("Done setting up input handlers.")
+    Logger.debug("\t...Done setting up input handlers.")
 }
 
 const JsonConfig = {
@@ -189,7 +155,7 @@ const JsonConfig = {
     theme: 'dark',
     animateOpen: false,
     animateClose: false,
-    useToJSON: true,
+    useToJSON: false,
     sortPropertiesBy: (a: string, b: string) => (a === '_' ? -1 : 0)
 }
 
@@ -198,6 +164,8 @@ namespace PanelState {
 }
 
 function handleRawModelMessage(message: any, expand_all=false) {
+
+    Logger.info(`Processing raw model message...`)
 
     const expansion_level = expand_all ? Infinity : 1
     PanelState.rawModel = new JSONFormatter(message.text, expansion_level, JsonConfig)
@@ -209,9 +177,13 @@ function handleRawModelMessage(message: any, expand_all=false) {
     let rawModel = domElem('#rawModel')
     removeAllChildren(rawModel)
     rawModel.appendChild(pre)
+
+    Logger.info(`...Done processing raw model message.`)
 }
 
 function handleGraphModelMessage(message: any) {
+
+    Logger.info(`Processing graph model message...`)
 
     const current = new JSONFormatter(message.text, 1, JsonConfig)
 
@@ -222,6 +194,61 @@ function handleGraphModelMessage(message: any) {
     const modelElem = domElem('#graphModel')
     removeAllChildren(modelElem)
     modelElem.appendChild(pre)
+
+    Logger.info(`...Done processing graph model message.`)
+}
+
+function initProgramStateSelect(message: any) {
+
+    Logger.info(`Processing program states message...`)
+
+    let progStateSelect = <HTMLSelectElement> domElem('select#programStates')
+    let states: Array<{name: string, val: string}> = message.text
+    states.forEach(state => {
+        let item: HTMLOptionElement = document.createElement('option')
+        item.value = state.name
+        item.title = state.val
+        item.label = state.name
+        progStateSelect.add(item)
+    })
+    progStateSelect.disabled = false
+
+    Logger.info(`...Done processing program states message.`)
+}
+
+function displayGraph(message: any) {
+
+    Logger.info(`Processing display Graph message...`)
+
+    let dot = message.text
+
+    // Print the DOT code for debug purposes
+    const pre = document.createElement('pre')
+    pre.classList.add('json')
+    pre.innerText = dot
+
+    const dotGraphSource = domElem('#dotGraphSource')
+    removeAllChildren(dotGraphSource)
+    dotGraphSource.appendChild(pre)
+    
+    const graph = document.createElement('div')
+    graph.id = 'graph'
+
+    const graphPanel = domElem('#graphPanel')
+    removeAllChildren(graphPanel)
+    graphPanel.appendChild(graph)
+    
+    let options = {
+        fit: true, 
+        useWorker: false
+    }
+    Logger.info(`\tStarting graph render...`)
+    d3.graphviz("#graph", options).renderDot(dot)
+    Logger.info(`\tDone rendering graph.`)
+
+    window.setTimeout(() => graph.style.opacity = '1', 100)
+
+    Logger.info(`...Processing display Graph message.`)
 }
 
 

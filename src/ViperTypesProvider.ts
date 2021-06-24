@@ -1,4 +1,4 @@
-import { BoolType, IntType, PermType, RefType, SetType, OtherType, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry,  } from "./Models"
+import { PrimitiveTypes, PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, GraphNode,  } from "./Models"
 import { ViperDefinition, AtomicType, BackendType, GenericType, Type, BuiltinCollectionType, MapType, DomainType, TypedViperDefinition } from "./ViperAST"
 
 // import { Session } from './Session'
@@ -15,24 +15,19 @@ export class ViperTypesProvider {
         let viper_type_map = new Map<string, ViperType>()    // for mapping values to types
         let viper_type_cache = new Map<string, ViperType>()  // for reusing the types whenever possible
 
-        let viper_Bool_type = new BoolType();                viper_type_cache.set('Bool', viper_Bool_type)
-        let viper_Int_type  = new IntType();                 viper_type_cache.set('Int', viper_Int_type)
-        let viper_Ref_type  = new RefType();                 viper_type_cache.set('Ref', viper_Ref_type)
-        let viper_Perm_type = new PermType();                viper_type_cache.set('Perm', viper_Perm_type)
-        let viper_Wand_type = new OtherType('Wand');         viper_type_cache.set('Wand', viper_Wand_type)
-        let viper_Internal_type = new OtherType('Internal'); viper_type_cache.set('Internal', viper_Internal_type)
+        viper_type_cache.set('Bool', PrimitiveTypes.Bool)
+        viper_type_cache.set('Int', PrimitiveTypes.Int)
+        viper_type_cache.set('Ref', PrimitiveTypes.Ref)
+        viper_type_cache.set('Perm', PrimitiveTypes.Perm)
+        viper_type_cache.set('Wand', PolymorphicTypes.Other('Wand'))
+        viper_type_cache.set('Internal', PolymorphicTypes.Other('Internal'))
+        viper_type_cache.set('Set[Ref]', PolymorphicTypes.Set(PrimitiveTypes.Ref))
 
         let strToType = (strRepr: string) => {
             if (viper_type_cache.has(strRepr)) {
                 return viper_type_cache.get(strRepr)!
             } else {
-                let new_type: ViperType
-                if (strRepr === 'Set[Ref]') {
-                    new_type = new SetType(undefined, viper_Ref_type)
-                } else {
-                    // TODO: track types more precisely
-                    new_type = new OtherType(strRepr)
-                }
+                let new_type = PolymorphicTypes.Other(strRepr)
                 viper_type_cache.set(strRepr, new_type)
                 return new_type
             }
