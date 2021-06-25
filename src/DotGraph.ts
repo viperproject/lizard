@@ -1,43 +1,49 @@
-import { Graph, GraphModel, GraphNode, isRef, Node, Relation } from "./Models";
+import { Graph, GraphModel, GraphNode, isRef, Node, Relation, State } from "./Models";
 
 
 export class DotGraph {
 
-    private __node_map: Map<number, GraphNode> | undefined = undefined 
+    private __state_map = new Map<string, State>()
+    private __graph_node_map = new Map<number, GraphNode>()
+    private __scalar_node_map = new Map<number, Node>()
     
-    private getGraphNodeById(node_id: number): GraphNode {
-        return this.__node_map!.get(node_id)!
+    private getGraphNodeById(node_id: number): GraphNode | undefined {
+        return this.__graph_node_map.get(node_id)
+    }
+
+    private getScalarNodeById(node_id: number): Node | undefined {
+        return this.__scalar_node_map.get(node_id)
     }
 
     private renderNodeValue(node: Node): string {
         let val_id = this.renderValue(node.val)
+        if (val_id === node.val) {
+            // Literal values do not require type prefix
+            return node.val
+        }
         switch (node.type!.typename) {
             case 'Ref':
-                return `r${val_id}`
+                return `ρ${val_id}`
             case 'Int': 
-                return `i${val_id}`
+                return `ι${val_id}`
             case 'Perm': 
-                return `p${val_id}`
+                return `π${val_id}`
             case 'Bool':
-                return `b${val_id}`
+                return `β${val_id}`
             case 'Set[Ref]': 
-                return `G${val_id}`
+                return `γ${val_id}`
             default: 
-                return `v${val_id}`
+                return `α${val_id}`
         }
     }
 
     private renderValue(value: string): string {
-        if (this.isCarbon) {
-            let m = value.match(/(T@T|T@U).*val\!(\d+)/)
-            if (!m) {
-                throw `cannot parse value from Carbon's model: ${value}`
-            }
-            return m[2]
-        } else {
-            // TODO
+
+        let m = value.match(/(.*)\!val\!(\d+)/)
+        if (!m) {
             return value
         }
+        return m[2]
     }
 
     private static graphPreamble = `graph [outputorder="nodesfirst" labelloc="t" label="" fontname="Helvetica" nodesep="1pt" ranksep="1pt" overlap=false];`
@@ -58,33 +64,46 @@ export class DotGraph {
 
     private isFieldRef(field: Relation): boolean {
         let succ = this.getGraphNodeById(field.succ_id)
-
-        // FIXME: there shouldn't be any unhashed nodes if the saturation mechanism is working properly 
         if (succ === undefined) {
             return false
+        } else {
+            return succ.type !== undefined && succ.type.typename === 'Ref'
         }
-
-        return succ.type !== undefined && succ.type.typename === 'Ref'
     }
     
     private isFieldValueNull(field: Relation): boolean {
         let succ = this.getGraphNodeById(field.succ_id)
-        return this.isFieldRef(field) && succ.isNull
+        if (succ === undefined) {
+            return false
+        } else {
+            return succ.isNull
+        }
     }
 
     private nodeFields(node: GraphNode): string {
-        return node.fields.map(field => {
+        return node.fields.filter(field => 
+            this.__state_map.has(field.state.name))
+        .map(field => {  
+            let state = (this.__state_map.size > 1) ? `[${field.state.name}]` : ``
             let succ = this.getGraphNodeById(field.succ_id)
 
-            // FIXME: there shouldn't be any unhashed nodes if the saturation mechanism is working properly 
+            let val: string
             if (succ === undefined) {
-                return ``
+                // Treat as scalar field
+                let scalar_succ = this.getScalarNodeById(field.succ_id)
+                if (scalar_succ === undefined) {
+                    throw `there shouldn't be any unhashed nodes if the saturation mechanism is working properly, but N${field.succ_id} is not hashed`
+                }
+                val = this.renderNodeValue(scalar_succ)
+            } else {
+                // Treat as Ref-field
+                val = this.renderNodeValue(succ)
             }
 
             return `<TR><TD align="text" PORT="${field.name}@${field.state.name}">` + 
-                   `${field.name}[${field.state.name}]` +
-                   (this.isFieldValueNull(field) ? ` = null` : (!this.isFieldRef(field) ? ` = ${this.renderNodeValue(succ)}` : ``)) +
-                   `<BR ALIGN="left" /></TD></TR>`
+                `${field.name}${state}` +
+                (this.isFieldValueNull(field) ? ` = null` : (!this.isFieldRef(field) ? ` = ${val}` : ``)) +
+                `<BR ALIGN="left" /></TD></TR>`
                    
         }).join('\n\t\t') + `\n`
     }
@@ -104,20 +123,16 @@ export class DotGraph {
                 `\t${graph.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
     }
 
-    private renderField(field: Relation): string {
-        if (this.isFieldValueNull(field)) {
-            return ``
-        } else {
-            let pred = this.getGraphNodeById(field.pred_id)
-            let succ = this.getGraphNodeById(field.succ_id)
+    private renderFieldRelation(field: Relation): string {
+        let pred = this.getGraphNodeById(field.pred_id)
+        let succ = this.getGraphNodeById(field.succ_id)
 
-            // FIXME: there shouldn't be any unhashed nodes if the saturation mechanism is working properly 
-            if (succ === undefined) {
-                return ``
-            }
-
-            return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD";`
+        if (pred === undefined || succ === undefined) {
+            throw `both pred and succ of a heap-related graph nodes must be hashed at this point, ` + 
+                  `but N${field.pred_id} or N${field.succ_id} are not`
         }
+
+        return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD";`
     }
 
     private storeNodes(nodes: Array<Node>): string {
@@ -127,7 +142,7 @@ export class DotGraph {
                 repr = node.repr(true, !(<GraphNode> node).isNull)
             } else {
                 // not a graph node
-                repr = node.repr(true, false)
+                repr = `${node.repr(true, true)} = ${this.renderNodeValue(node)}`
             }
 
             return `<TR><TD align="text" PORT="Local_N${node.id}">` + 
@@ -145,34 +160,34 @@ export class DotGraph {
     }
 
     private renderRefs(graph_nodes: Array<GraphNode>): string {
-        return graph_nodes.map(ref_node => {
-                if (ref_node.isNull) {
-                    return ``
-                } else {
-                    return `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}:"$HEAD" [constraint=false style=dotted];`
-                }
-            }).join('\n\t')
+        return graph_nodes.map(ref_node => 
+            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}:"$HEAD" [constraint=false style=dotted];`).join('\n\t')
     }
 
     private __buffer: string
 
     constructor(public model: GraphModel, 
                 readonly isCarbon: boolean) {
+        
+        // hash nodes by their ids and states by their names
+        model.graphNodes.forEach(node => this.__graph_node_map.set(node.id, node))
+        model.scalarNodes.forEach(node => this.__scalar_node_map.set(node.id, node))
+        model.states.forEach(state => this.__state_map.set(state.name, state))
 
-        // hash nodes by their ids
-        this.__node_map = new Map<number, GraphNode>()
-        model.graphNodes.forEach(node => this.__node_map!.set(node.id, node))
-
-        // collect all fields names used in the model
+        // collect all field names used in the model
         let fields_hash = new Set<string>()
         model.fields.forEach(field => fields_hash.add(field.name))
 
         let graphs = model.graphs.map(graph => this.renderGraph(graph)).join('\n\t')
-        let edges = model.fields.map(field => this.renderField(field)).join('\n\t')
+        let edges = model.fields.filter(field => 
+            this.isFieldRef(field) && !this.isFieldValueNull(field)).map(field => 
+                this.renderFieldRelation(field)).join('\n\t')
         
         // render the local store
-        let store = this.renderLocalStore(model.scalarNodes.concat(model.graphNodes.filter(n => !n.isNull)))
-        let refs = this.renderRefs(model.graphNodes)
+        let local_refs = model.graphNodes.filter(n => n.isLocal)
+        let local_scalar_nodes = model.scalarNodes.filter(n => n.isLocal)
+        let store = this.renderLocalStore(local_scalar_nodes.concat(local_refs))
+        let refs = this.renderRefs(local_refs)
         
         this.__buffer = `digraph g {\n` + 
                         `\t${DotGraph.graphPreamble}\n` + 

@@ -138,6 +138,7 @@ export class Node {
                 public type: ViperType,                 // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
                 readonly id: number,                    // 0, 1, 2, ...
                 public val: string,                     // e.g. "$Ref!val!0"
+                readonly isLocal: boolean,             // whether this ndoe is refer to from the program store
                 public proto: string | undefined = undefined) { // e.g. "X"
     
         this._ = this.repr()
@@ -157,9 +158,10 @@ export class GraphNode extends Node {
                 readonly isNull: boolean,
                 readonly id: number,
                 public val: string,
+                readonly isLocal: boolean,
                 public proto: string | undefined = undefined) {
         
-        super(aliases, PrimitiveTypes.Ref, id, val, proto)
+        super(aliases, PrimitiveTypes.Ref, id, val, isLocal, proto)
     }
 }
 
@@ -169,9 +171,10 @@ export class Graph extends Node {
                 public aliases: Array<string>, 
                 readonly id: number, 
                 readonly val: string, 
+                readonly isLocal: boolean,
                 public proto: string | undefined = undefined) {
 
-        super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, proto)
+        super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, isLocal, proto)
     }
 }
 
@@ -204,9 +207,31 @@ export class GraphModel {
         public paths: Array<Relation> = [],
 
         public equivalence_classes: EquivClasses = new EquivClasses()) {}
-
 }
 
 export class EquivClasses {
-    [Key: string]: Array<Node>   // mapping inner values to nodes'
+    
+    // mapping keys to nodes
+    private __buf: { 
+        [Key: string]: Array<Node>
+    } = {}
+
+    public static key(innerval: string, type: ViperType): string {
+        return `${innerval}:${type.typename}`
+    }
+
+    public has(innerval: string, type: ViperType): boolean {
+        let key = EquivClasses.key(innerval, type)
+        return this.__buf.hasOwnProperty(key)
+    }
+
+    public get(innerval: string, type: ViperType): Array<Node> {
+        let key = EquivClasses.key(innerval, type)
+        return this.__buf[key]
+    }
+
+    public set(innerval: string, type: ViperType, nodes: Array<Node>): void {
+        let key = EquivClasses.key(innerval, type)
+        this.__buf[key] = nodes
+    }
 }

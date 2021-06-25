@@ -51,14 +51,36 @@ export namespace Lizard {
             return model_maybe
         }
 
+        function tryRenderGraph(graph_model: GraphModel): boolean {
+            let dot_graph: DotGraph
+            try {
+                dot_graph = new DotGraph(graph_model, session!.isCarbon())
+            } catch (error) {
+                Logger.error(`DotGraph() reached an exceptional situation: ${error}`)
+                return false
+            }
+            try {
+                panel!.renderGraph(dot_graph)
+            } catch (error) {
+                Logger.error(`DebuggerPanel.renderGraph() reached an exceptional situation: ${error}`)
+                return false
+            }
+            return true
+        }
+
         function handleQuery(query: Query) {
             let graph_model = tryProducingGraphModel(query)
             if (!graph_model) return 
+
             panel!.emitRefinedModel(graph_model)
             Logger.info(`✓ processed query ${JSON.stringify(query)}`)
 
-            panel!.renderGraph(new DotGraph(graph_model, session!.isCarbon()))
-            Logger.info(`✓ rendered the graph model. enjoy!`)
+            let outcome = tryRenderGraph(graph_model)
+            if (outcome) {
+                Logger.info(`✅ rendered the graph model. enjoy!`)
+            } else {
+                Logger.info(`❌ graph rendering failed`)
+            }
         }
         
         viperApi.registerServerMessageCallback('verification_result', (messageType: string, message: any) => {
@@ -94,20 +116,22 @@ export namespace Lizard {
             Logger.info(`✓ preprocessed the raw model`)
 
             // Step 2 -- model refinement
-            let graphModel: GraphModel
-            try {
-                graphModel = session!.produceGraphModel()
-            } catch (error) {
-                Logger.error(`Session.produceGraphModel() reached an exceptional situation: ${error}`)
-                return 
+            let graph_model = tryProducingGraphModel()
+            if (graph_model === undefined) {
+                Logger.info(`visualization interrupted because a graph model could not be produced`)
+                return
             }
-            panel!.emitRefinedModel(graphModel)
+            panel!.emitRefinedModel(graph_model)
             Logger.info(`✓ prepared the graph model`)
             
             // Step 3 -- visualization
-            let dot = new DotGraph(graphModel, session!.isCarbon())
-            panel!.renderGraph(dot)
-            Logger.info(`✓ rendered the graph model. enjoy!`)
+            tryRenderGraph(graph_model)
+            let outcome = tryRenderGraph(graph_model)
+            if (outcome) {
+                Logger.info(`✅ rendered the graph model. enjoy!`)
+            } else {
+                Logger.info(`❌ graph rendering failed`)
+            }
         })
     }
 }

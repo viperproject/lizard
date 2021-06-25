@@ -1,7 +1,5 @@
-import { PrimitiveTypes, PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, ViperType, Node, Graph, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, GraphNode,  } from "./Models"
+import { PrimitiveTypes, PolymorphicTypes, ViperType } from "./Models"
 import { ViperDefinition, AtomicType, BackendType, GenericType, Type, BuiltinCollectionType, MapType, DomainType, TypedViperDefinition } from "./ViperAST"
-
-// import { Session } from './Session'
 
 export class ViperTypesProvider {
 

@@ -40,12 +40,12 @@ export class Session {
         return next_node_id
     }
 
-    private mkNode(name: string, innerval: string, 
+    private mkNode(name: string, innerval: string, is_local: boolean, 
                    type: ViperType | undefined = undefined, proto: string | undefined = undefined): Node {
 
         // Special case the null node
         if (name === this.nullNodeName()) {
-            this.null_node = new GraphNode([name], true, this.freshNodeId(), innerval, proto)
+            this.null_node = new GraphNode([name], true, this.freshNodeId(), innerval, false, proto)
             return this.null_node!
         }
         if (!type) {
@@ -58,11 +58,11 @@ export class Session {
             }
         }
         if (type.typename === 'Set[Ref]') {
-            return new Graph([], [name], this.freshNodeId(), innerval, proto)
+            return new Graph([], [name], this.freshNodeId(), innerval, is_local, proto)
         } else if (type && type.typename === 'Ref') {
-            return new GraphNode([name], false, this.freshNodeId(), innerval, proto)
+            return new GraphNode([name], false, this.freshNodeId(), innerval, is_local, proto)
         } else {
-            return new Node([name], type, this.freshNodeId(), innerval, proto)
+            return new Node([name], type, this.freshNodeId(), innerval, is_local, proto)
         }
     }
 
@@ -179,7 +179,7 @@ export class Session {
             
             if (entry.type === 'constant_entry' || entry.type == 'application_entry') {
                 let innerval = Session.serializeEntryValue(entry)
-                let node = this.mkNode(name, innerval)
+                let node = this.mkNode(name, innerval, true)
                 this.atoms!.push(node)
             }
         })
@@ -192,15 +192,16 @@ export class Session {
 
     private collectEquivClasses(nodes: Array<Node>, ec: EquivClasses): void {
         nodes.forEach(node => {
-            if (ec.hasOwnProperty(node.val)) {
-                ec[node.val].push(node)
+            let key: [string, ViperType] = [node.val, node.type]
+            if (ec.has(...key)) {
+                ec.get(...key)!.push(node)
             } else {
-                ec[node.val] = [node]
+                ec.set(...key, new Array(node))
             }
         })
     }
 
-    private collectGraphsAndNodes(): Array<Node> {
+    private collectInitialGraphsAndNodes(): Array<Node> {
         
         let names = this.getDefinitionNames('Local')
                     .concat(this.getDefinitionNames('Argument'))
@@ -217,10 +218,10 @@ export class Session {
                 let atom_name = atom.aliases[0]
                 return this.isPrototypeOf(proto, atom_name)
             }).map(atom => {
-                    // Set the prototype variable for this atom
-                    atom.proto = proto
-                    return atom
-                }))
+                // Set the prototype variable for this atom
+                atom.proto = proto
+                return atom
+            }))
 
         // Check that all expected nodes are defined in each state
         if (atoms.length < names.length) {
@@ -236,50 +237,48 @@ export class Session {
 
     private mergeAliases(nodes: Array<Node>): Array<Node> {
 
-        let new_nonaliasing_node = new Array<Node>()
+        let new_nonaliasing_nodes = new Set<Node>()
 
         nodes.forEach(node => {
-            let innerval = node.val
-            if (this.nonAliasingNodesMap.has(innerval)) {
-                // We already have a representative for this node inner value
-                let na_node = this.nonAliasingNodesMap.get(innerval)!
-                if (node.aliases.length > 1) {
-                    throw `aliasing node ${JSON.stringify(node)} is expected to have only one internal name`
-                }
+            if (node.aliases.length > 1) {
+                throw `aliasing node ${JSON.stringify(node)} is expected to have only one internal name`
+            }
+
+            let key = EquivClasses.key(node.val, node.type)
+            if (this.nonAliasingNodesMap.has(key)) {
+                // We already have a representative for this node inner value+type
+                let na_node = this.nonAliasingNodesMap.get(key)!
                 na_node.aliases.push(node.aliases[0])
-                new_nonaliasing_node.push(na_node)
+                new_nonaliasing_nodes.add(na_node)
             } else {
                 // This is a new node inner value
-                this.nonAliasingNodesMap.set(innerval, node)
-                new_nonaliasing_node.push(node)
+                this.nonAliasingNodesMap.set(key, node)
+                new_nonaliasing_nodes.add(node)
             }
         })
 
-        return new_nonaliasing_node
+        return Array.from(new_nonaliasing_nodes)
     }
 
     private collectFields(nodes: Array<GraphNode>): Array<Relation> {
         let fnames = this.getDefinitionNames('Field')
 
-        // Check if the method containing the failed assertion uses any fields at all
-        let useful_fields = fnames.find(fname => {
+        // Extract fields which are present in the model
+        let useful_fields = fnames.filter(fname => {
             let rel_name = this.fieldLookupRelationName(fname)
             let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
             return rel_maybe !== undefined
         })
-        if (useful_fields === undefined) {
-            return []
-        }
 
         // Deduce relations for each field, node, state
-        let state_to_field_val_funs = fnames.flatMap(fname => 
+        let state_to_field_val_funs = useful_fields.flatMap(fname => 
             nodes.flatMap(node => {
                 let state_to_rels = this.collectFieldValueInfo(node, fname)
                 let rels = this.states!.map(state => {
                     let adj_node = state_to_rels(state)
                     return new Relation(fname, state, node.id, adj_node.id)
                 })
-                node.fields = rels
+                node.fields.push(...rels)
                 return rels
             }))
 
@@ -293,12 +292,12 @@ export class Session {
             Logger.warn(`the model does not contain the expected relation '${rel_name}'`)
             return
         }
-        if (rel.type !== 'map_entry') {
+        if (rel.type !== 'map_entry') { // TODO remove this 
             throw `set-in relation '${rel_name}' is expected to be of type 'map_entry'`
         }
         graphs.forEach(graph => {
             nodes.forEach(node => {
-                let val = Session.appleEntry(rel!, [graph.val, node.val])
+                let val = this.applySetInMapEntry(rel!, graph, node)
                 if (this.isInnerValueTrue(val)) {
                     // this node belongs to this graph
                     graph.nodes.push(node)
@@ -327,11 +326,11 @@ export class Session {
 
         // B. Deduce and merge aliasing nodes 
         this.collectEquivClasses(starting_atoms, this.equiv_classes)
-        let new_nonaliasing_node = this.mergeAliases(starting_atoms)
+        let new_nonaliasing_nodes = this.mergeAliases(starting_atoms)
 
         // C. Split nodes into Ref-typed and all others
         let new_graph_nodes = new Array<GraphNode>()
-        new_nonaliasing_node.forEach(node => {
+        new_nonaliasing_nodes.forEach(node => {
             if (node.type && isRef(node.type)) {
                 new_graph_nodes.push(<GraphNode> node)
             } else if (node.type && isSetOfRefs(node.type)) {
@@ -346,21 +345,18 @@ export class Session {
         this.connectNodesToGraphs(new_graph_nodes, this.graphs)
 
         // E. Collect information about fields  
-        let new_fields = this.collectFields(new_graph_nodes)
+        let new_fields = this.collectFields(new_graph_nodes.filter(n => !n.isNull))
         this.fields.push(...new_fields)
 
         // F. Some of the fields may lead to new nodes that must be encountered for in the model. 
-        let trans_nodes = new Set<Node>()
-        new_fields.forEach(field => {
-            if (!this.node_hash.has(field.succ_id)) { 
-                let trans_node = this.transitive_nodes.get(field.succ_id)!
-                trans_nodes.add(trans_node)
-            }
-        })
+        let trans_nodes = Array.from(this.transitive_nodes.values())
+        this.transitive_nodes = new Map<number, Node>()
 
         // G. Saturate! 
-        if (trans_nodes.size > 0) {
-            this.produceGraphModelRec(Array.from(trans_nodes), iteration+1)
+        if (trans_nodes.length > 0) {
+            this.produceGraphModelRec(trans_nodes, iteration+1)
+        } else {
+            Logger.info(`🎩 saturation completed 🎩`)
         }
 
         // H. Return model
@@ -372,7 +368,7 @@ export class Session {
 
     public produceGraphModel(): GraphModel {
         // O. Collect initial nodes
-        let starting_atoms = this.collectGraphsAndNodes()
+        let starting_atoms = this.collectInitialGraphsAndNodes()
         // I. Process and Saturate! 
         return this.produceGraphModelRec(starting_atoms)
     }
@@ -380,13 +376,13 @@ export class Session {
     public applyQuery(query: Query): GraphModel {
 
         // Filter the states
-        let state_name_hash = new Map<string, undefined>()
-        query.states.forEach(state_name => state_name_hash.set(state_name, undefined))
-
-        let filtered_fields = this.graphModel!.fields.filter(field => state_name_hash.has(field.state.name))
+        let selected_states = new Set<string>(query.states)
+        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.name))
+        let filtered_states = this.graphModel!.states.filter(state => selected_states.has(state.name))
         this.latestQuery = new GraphModel()
         Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
+        this.latestQuery!.states = filtered_states
         
         return this.latestQuery!
     }
@@ -456,37 +452,83 @@ export class Session {
         let simple_fun = this.partiallyApplyFieldMapEntry(<MapEntry> rel, node.val, field_node_val)
         return (state: State) => {
             let succ_innerval = simple_fun(state.val)
+            let field_type = this.viperTypes!.get(fname)
+            let key = EquivClasses.key(succ_innerval, field_type)
             let succ: Node
-            if (this.extended_equiv_classes.hasOwnProperty(succ_innerval)) {
-                let succs = this.extended_equiv_classes[succ_innerval]
-                if (succs.length > 1) {
-                    Logger.warn(`multiple values are possible for ${node.aliases}.${fname}; ` + 
-                                `perhaps there are multiple program states involved?`)
-                }
-                succ = succs[0]
+            if (this.nonAliasingNodesMap.has(key)) {
+                // succ is a representative of multiple aliasing nodes
+                succ = this.nonAliasingNodesMap.get(key)!
             } else {
                 // this is a fresh value; create a new atom to support it
                 let name = `${node.aliases}.${fname}`
-                let type = this.viperTypes!.get(fname)
-                succ = this.mkNode(name, succ_innerval, type)
+                succ = this.mkNode(name, succ_innerval, false, field_type)
                 Logger.info(`no atom found for value ${succ_innerval} of ${name}; adding transitive node with id ${succ.id}`)
-                this.extended_equiv_classes[succ_innerval] = new Array<Node>(succ)
+                this.nonAliasingNodesMap.set(key, succ)
                 this.transitive_nodes.set(succ.id, succ)
             }
             return succ
         }
     }
 
-    // private getAtomsByInnerVal(innerval: string): Array<Node> {
-    //     return this.atoms!.filter(atom => atom.val === innerval)
-    // }
+
+    /** Example application entry in function model: 
+      *
+      *  type: "application_entry"
+      *  value:Object
+      *      name:"="
+      *      args:Array[2]
+      *          0:Object
+      *              type: "application_entry"
+      *              value:Object
+      *                  name: ":var" 
+      *                  args:Array[1]
+      *                      0:Object
+      *                          type: "constant_entry"
+      *                          value:"0"
+      *          1:Object
+      *              type: "constant_entry"
+      *              value: "$Ref!val!1"
+      */
+     private static evalEntry(entry: ModelEntry, args: Array<string>): string {
+        if (entry.type === 'constant_entry') {
+            return getConstantEntryValue(entry)
+
+        } else if (entry.type === 'application_entry') {
+            let app_entry = (<ApplicationEntry> entry)
+            let fun = app_entry.value.name
+            let fun_args = app_entry.value.args
+            let sub_results = fun_args.map(fun_arg => Session.evalEntry(fun_arg, args))
+            if (fun === 'and') {
+                // do all arguments evaluate to 'true'?
+                return sub_results.every(sub_res => sub_res === 'true') ? 'true' : 'false'
+            } else if (fun === 'or') {
+                // do some arguments evaluate to 'true'?
+                return sub_results.some(sub_res => sub_res === 'true') ? 'true' : 'false'
+            } else if (fun === 'not' || fun === '!') {
+                // negate the argument 
+                return sub_results[0] === 'true' ? 'false' : 'true'
+            } else if (fun === '=') {
+                // check that all arguments of '=' evaluate to the same value
+                return (new Set(sub_results)).size === 1 ? 'true' : 'false'
+            } else if (fun === ':var') {
+                let arg_index = parseInt(getConstantEntryValue(fun_args[0]))
+                return args[arg_index]
+            } else {
+                throw `unsupported function: '${fun}'`
+            }
+            
+        } else {
+            return Session.appleEntry(entry, args)
+        }
+    }
 
     static appleEntry(entry: ModelEntry, args: Array<string>): string {
         if (entry.type === 'constant_entry') {
             let const_entry = <ConstantEntry> entry
             return const_entry.value
         } else if (entry.type === 'application_entry') {
-            throw `entries of type 'application_entry' are not yet supported`
+            let app_entry = (<ApplicationEntry> entry)
+            return Session.evalEntry(app_entry, args)
         } else {
             let map_entry = <MapEntry> entry
             let res_entry_maybe = map_entry.cases.find(map_case => {
@@ -499,11 +541,11 @@ export class Session {
             })
             if (res_entry_maybe) {
                 let case_entry = res_entry_maybe!.value
-                let case_val = getConstantEntryValue(case_entry)
+                let case_val = Session.appleEntry(case_entry, args)
                 return case_val
             } else {
                 let default_entry = map_entry.default
-                let default_val = getConstantEntryValue(default_entry)
+                let default_val = Session.appleEntry(default_entry, args)
                 return default_val
             } 
         }
@@ -582,6 +624,14 @@ export class Session {
 
     private setIncludesRelationName(): string {
         return this.isCarbon() ? '[2]' : 'Set_in'
+    }
+
+    private applySetInMapEntry(entry: ModelEntry, graph: Graph, node: GraphNode): string {
+        if (this.isCarbon()) {
+            return Session.appleEntry(entry, [graph.val, node.val])
+        } else {
+            return Session.appleEntry(entry, [node.val, graph.val])
+        }
     }
 
     private isInnerValueTrue(innerval: string): boolean {
