@@ -288,12 +288,9 @@ export class Session {
     private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Set<Graph>): void {
         let rel_name = this.setIncludesRelationName()
         let rel = this.getEntryByName(rel_name)
-        if (!rel) {
+        if (rel === undefined) {
             Logger.warn(`the model does not contain the expected relation '${rel_name}'`)
             return
-        }
-        if (rel.type !== 'map_entry') { // TODO remove this 
-            throw `set-in relation '${rel_name}' is expected to be of type 'map_entry'`
         }
         graphs.forEach(graph => {
             nodes.forEach(node => {
@@ -669,7 +666,7 @@ export class Session {
         }
     }
 
-    private siliconInnerNameParser(inner_name: string): 
+    private static innerNameParser(inner_name: string): 
         { proto: string, suffix?: number, index?: number } {
 
         let m2 = inner_name.match(/(.*)@(\d+)@(\d+)/)
@@ -683,16 +680,21 @@ export class Session {
         return { proto: inner_name }
     }
 
-    private siliconInnerToProto(inner_name: string): string {
-        let inner_name_struct = this.siliconInnerNameParser(inner_name)
+    private static siliconInnerToProto(inner_name: string): string {
+        let inner_name_struct = Session.innerNameParser(inner_name)
+        return inner_name_struct.proto
+    }
+
+    private static carbonInnerNameToProto(inner_name: string): string {
+        let inner_name_struct = Session.innerNameParser(inner_name)
         return inner_name_struct.proto
     }
     
     private innerToProto(is_carbon: boolean, inner_name: string): string {
         if (is_carbon) {
-            return inner_name
+            return Session.carbonInnerNameToProto(inner_name)
         } else {
-            return this.siliconInnerToProto(inner_name)
+            return Session.siliconInnerToProto(inner_name)
         }
     }
 
@@ -715,7 +717,7 @@ export class Session {
                     throw `at this point, each node is expected to have only one name`
                 }
                 let name = names[0]
-                let name_struct = this.siliconInnerNameParser(name)
+                let name_struct = Session.innerNameParser(name)
                 let proto = name_struct.proto
                 let index = name_struct.index
                 if (index === undefined) {

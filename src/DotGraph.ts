@@ -155,7 +155,7 @@ export class DotGraph {
         let table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
                     `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>Local </B></FONT></TD></TR>\n` + 
                     `\t\t` + this.storeNodes(nodes) + 
-                    `\t</TABLE>`
+                    `\t\t</TABLE>`
         return `"$Store" [ label=<${table}> ];`
     }
 
