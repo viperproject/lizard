@@ -198,6 +198,9 @@ export class DotGraph {
 
         // render the heap graph
         let graphs = model.graphs.map(graph => this.renderGraph(graph)).join('\n\t')
+        let nodes_in_graphs = new Set(model.graphs.flatMap(graph => graph.nodes))
+        let outer_nodes = model.graphNodes.filter(node => 
+            !node.isNull && !nodes_in_graphs.has(node)).map(node => this.renderNode(node)).join('\n\t')
         let edges = model.fields.filter(field => 
             this.isFieldRef(field) && !this.isFieldValueNull(field)).map(field => 
                 this.renderFieldRelation(field)).join('\n\t')
@@ -213,6 +216,7 @@ export class DotGraph {
                         `\t${this.nodePreamble()}\n` + 
                         `\t${store}\n` + 
                         `\t${graphs}\n` + 
+                        `\t${outer_nodes}\n` + 
                         `\t${refs}\n` + 
                         `\t${edges}\n}`
     }
