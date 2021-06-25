@@ -143,8 +143,12 @@ function setupInputHandlers() {
         }
     }
 
-    domElem('button#toggleRankDir').onclick = () => 
-        vscode.postMessage({ command: 'toggleRankDir' })
+    domElem('button#toggleRankDir').onclick = () => {
+        const disabled = progStateSelect.hasAttribute('disabled')
+        if (!disabled) {
+            vscode.postMessage({ command: 'toggleRankDir' })
+        }
+    }
    
     Logger.debug("\t...Done setting up input handlers.")
 }
@@ -219,7 +223,7 @@ function initProgramStateSelect(message: any) {
 
 function displayGraph(message: any) {
 
-    Logger.info(`Processing display Graph message...`)
+    Logger.info(`Processing display graph message...`)
 
     let dot = message.text
 
@@ -249,7 +253,10 @@ function displayGraph(message: any) {
 
     window.setTimeout(() => graph.style.opacity = '1', 100)
 
-    Logger.info(`...Processing display Graph message.`)
+    let toggleRankDirButton = <HTMLSelectElement> domElem('button#toggleRankDir')
+    toggleRankDirButton.disabled = false
+
+    Logger.info(`...Done processing display graph message.`)
 }
 
 
