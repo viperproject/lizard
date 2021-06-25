@@ -251,12 +251,22 @@ export class Session {
             if (node.aliases.length > 1) {
                 throw `aliasing node ${JSON.stringify(node)} is expected to have only one internal name`
             }
+            let node_name = node.aliases[0]
 
             let key = EquivClasses.key(node.val, node.type)
             if (this.nonAliasingNodesMap.has(key)) {
                 // We already have a representative for this node inner value+type
                 let na_node = this.nonAliasingNodesMap.get(key)!
-                na_node.aliases.push(node.aliases[0])
+                
+                // FIXME: Checking membership in the array [[na_node.aliases]] is not efficient; would be better to store aliases in a set. 
+                // FIXME: However, sets are not natively handles by our JSON visualization, so we bear with this theoretical inefficiency.  
+                if (!na_node.aliases.includes(node_name)) {
+                    // This is a new alias
+                    na_node.aliases.push(node_name)
+                    if (isRef(node.type) && (<GraphNode> node).isNull) {
+                        (<GraphNode> na_node).isNull = true
+                    }
+                } 
                 new_nonaliasing_nodes.add(na_node)
             } else {
                 // This is a new node inner value

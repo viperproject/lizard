@@ -156,7 +156,8 @@ export class DotGraph {
         return nodes.map(node => {
             let repr: string
             if (isRef(node.type)) {
-                repr = node.repr(true, !(<GraphNode> node).isNull)
+                // this is a graph node
+                repr = node.repr(true, true)
             } else {
                 // not a graph node
                 repr = `${node.repr(true, true)} = ${this.renderNodeValue(node)}`
@@ -209,7 +210,7 @@ export class DotGraph {
         let local_refs = model.graphNodes.filter(n => n.isLocal)
         let local_scalar_nodes = model.scalarNodes.filter(n => n.isLocal)
         let store = this.renderLocalStore(local_scalar_nodes.concat(local_refs))
-        let refs = this.renderRefs(local_refs)
+        let refs = this.renderRefs(local_refs.filter(n => !n.isNull))
         
         this.__buffer = `digraph g {\n` + 
                         `\t${this.graphPreamble()}\n` + 

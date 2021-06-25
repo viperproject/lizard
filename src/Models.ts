@@ -155,7 +155,7 @@ export class GraphNode extends Node {
     public fields: Array<Relation> = []
 
     constructor(public aliases: Array<string>,
-                readonly isNull: boolean,
+                public isNull: boolean,
                 readonly id: number,
                 public val: string,
                 readonly isLocal: boolean,
