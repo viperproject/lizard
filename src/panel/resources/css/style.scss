@@ -3,7 +3,7 @@ body {
     padding: 0;
     margin: 0;
     display: block;
-    // flex-direction: column;
+    flex-direction: column;
     height: 100vh;
     background-color: #222;
     color: #fff;
@@ -48,10 +48,16 @@ button:hover:not(:disabled) {
 }
 
 #nav {
-    height: 80px;
+    height: 88px;
+    // max-height: 88px;
+}
 
-    div#navRight {
-        float: right;
+.navItem {
+    margin: 0; 
+    float: left;
+
+    h4 {
+        margin-top: 0;
     }
 }
 
@@ -141,6 +147,12 @@ h3 {
     // background: #303030;
     background-color: #dddddd;
     cursor: row-resize;
+}
+
+.split {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 .gutter:hover,

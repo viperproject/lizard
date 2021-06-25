@@ -1,10 +1,8 @@
-import { Logger } from './logger'
-
 import JSONFormatter from 'json-formatter-js'
-
 import Split from 'split.js'
-
 import * as d3 from 'd3-graphviz'
+
+import { Logger } from './logger'
 
 declare var acquireVsCodeApi: any
 export const vscode = acquireVsCodeApi()
@@ -144,6 +142,9 @@ function setupInputHandlers() {
             vscode.postMessage({ command: 'filterStates', state_names: selected })
         }
     }
+
+    domElem('button#toggleRankDir').onclick = () => 
+        vscode.postMessage({ command: 'toggleRankDir' })
    
     Logger.debug("\t...Done setting up input handlers.")
 }

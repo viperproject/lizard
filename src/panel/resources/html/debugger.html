@@ -201,8 +201,14 @@
     <title>Viper Debugger</title>
 </head>
 <body>
-    <div id="nav" class="panel noScroll">
+    <div id="nav" class="panel noScroll">    
+      <div class="navItem">
         <select id="programStates" multiple size="4" disabled></select>
+      </div>
+      <div class="navItem">
+        <h4>Rendering Options</h4>
+        <button id="toggleRankDir">Toggle Rankdir</button>
+      </div>
     </div>
     <div id="graphPanel" class="panel noScroll"></div>
     <div id="diagnostics" class="panel scroll">

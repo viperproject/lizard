@@ -135,6 +135,14 @@ export class Session {
     private latestQuery: GraphModel | undefined = undefined 
     private graphModel: GraphModel | undefined = undefined
 
+    public getLatestModel(): GraphModel {
+        if (this.latestQuery !== undefined) {
+            return this.latestQuery
+        } else {
+            return this.graphModel!
+        }
+    }
+
     private null_node: GraphNode | undefined = undefined
 
     static unary_ops = new Set<string>(['-', '+', '!'])

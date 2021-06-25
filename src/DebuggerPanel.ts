@@ -27,7 +27,8 @@ export class DebuggerPanel {
     private panel: vscode.WebviewPanel
 
     constructor(readonly extensionPath: string,
-                readonly queryHandler: (q: Query) => any) {
+                readonly queryHandler: (q: Query) => any,
+                readonly toggleGraphRankDir: () => any) {
 
         this.panel = vscode.window.createWebviewPanel(
             'viperDebugPanel',
@@ -83,6 +84,10 @@ export class DebuggerPanel {
                 let state_names: Array<string> = message.state_names
                 this.queryHandler(new Query(state_names))
                 break 
+
+            case 'toggleRankDir': 
+                this.toggleGraphRankDir()
+                break
 
             default:
                 Logger.error(`Unknown command from debug pane: '${message}'`);

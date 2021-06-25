@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import { DebuggerPanel } from './DebuggerPanel'
-import { DotGraph } from './DotGraph'
+import { DotGraph, RenderOpts } from './DotGraph'
 import { viperApi } from './extension'
 import { Logger, LogLevel } from './logger'
 import { GraphModel } from './Models'
@@ -13,6 +13,10 @@ export namespace Lizard {
     var session: Session | undefined = undefined
     var panel: DebuggerPanel | undefined = undefined
     var sessionCounter = 0
+    const renderOpts: RenderOpts = {
+        is_carbon: false, 
+        rankdir_lr: false
+    }
 
     export function stop() {
         if (panel) panel!.dispose()
@@ -27,9 +31,12 @@ export namespace Lizard {
             
             session = new Session(viperApi.getBackendName())
             session.parseProgramDefinitions(message.msg_body.definitions)
+
+            // Initialize rendering options
+            renderOpts.is_carbon = session.isCarbon()
         
             if (panel) panel!.dispose()
-            panel = new DebuggerPanel(context.extensionPath, handleQuery)
+            panel = new DebuggerPanel(context.extensionPath, handleQuery, handleToggleGraphRankDirRequest)
             panel.reveal()
         })
 
@@ -54,7 +61,7 @@ export namespace Lizard {
         function tryRenderGraph(graph_model: GraphModel): boolean {
             let dot_graph: DotGraph
             try {
-                dot_graph = new DotGraph(graph_model, session!.isCarbon())
+                dot_graph = new DotGraph(graph_model, renderOpts!)
             } catch (error) {
                 Logger.error(`DotGraph() reached an exceptional situation: ${error}`)
                 return false
@@ -68,6 +75,16 @@ export namespace Lizard {
             return true
         }
 
+        function render(model?: GraphModel): void {
+            let m = model ? model : session!.getLatestModel()
+            let outcome = tryRenderGraph(m)
+            if (outcome) {
+                Logger.info(`✅ rendered the graph model. enjoy!`)
+            } else {
+                Logger.info(`❌ graph rendering failed`)
+            }
+        }
+
         function handleQuery(query: Query) {
             let graph_model = tryProducingGraphModel(query)
             if (!graph_model) return 
@@ -75,12 +92,13 @@ export namespace Lizard {
             panel!.emitRefinedModel(graph_model)
             Logger.info(`✓ processed query ${JSON.stringify(query)}`)
 
-            let outcome = tryRenderGraph(graph_model)
-            if (outcome) {
-                Logger.info(`✅ rendered the graph model. enjoy!`)
-            } else {
-                Logger.info(`❌ graph rendering failed`)
-            }
+            render(graph_model)
+        }
+
+        function handleToggleGraphRankDirRequest() {
+            Logger.info(`✓ processed toggle-rankdir request`)
+            renderOpts!.rankdir_lr = ! (renderOpts!.rankdir_lr!)
+            render()
         }
         
         viperApi.registerServerMessageCallback('verification_result', (messageType: string, message: any) => {
@@ -125,13 +143,7 @@ export namespace Lizard {
             Logger.info(`✓ prepared the graph model`)
             
             // Step 3 -- visualization
-            tryRenderGraph(graph_model)
-            let outcome = tryRenderGraph(graph_model)
-            if (outcome) {
-                Logger.info(`✅ rendered the graph model. enjoy!`)
-            } else {
-                Logger.info(`❌ graph rendering failed`)
-            }
+            render(graph_model)
         })
     }
 }

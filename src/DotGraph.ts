@@ -1,5 +1,9 @@
 import { Graph, GraphModel, GraphNode, isRef, Node, Relation, State } from "./Models";
 
+export interface RenderOpts {
+    is_carbon: boolean,
+    rankdir_lr: boolean
+}
 
 export class DotGraph {
 
@@ -46,9 +50,17 @@ export class DotGraph {
         return m[2]
     }
 
-    private static graphPreamble = `graph [outputorder="nodesfirst" labelloc="t" label="" fontname="Helvetica" nodesep="1pt" ranksep="1pt" overlap=false];`
-    private static clusterPreamble = `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin="40pt"];`
-    private static nodePreamble = `node [height=0 width=0 style="filled" penwidth=1 fillcolor="white" fontname="Helvetica" shape="none" margin="0"];`
+    private graphPreamble(): string {
+        let rankdir = this.opts.rankdir_lr ? ` rankdir="LR" ` : ``
+        let nodesep = this.opts.rankdir_lr ? `` : ` nodesep="0.5pt" `
+        return `graph [outputorder="nodesfirst" labelloc="t" label="" fontname="Helvetica" ${nodesep} ranksep="1pt" overlap=false ${rankdir}];`
+    }
+    private clusterPreamble(): string { 
+        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin="40pt"];`
+    }
+    private nodePreamble(): string {
+        return `node [height=0 width=0 style="filled" penwidth=1 fillcolor="white" fontname="Helvetica" shape="none" margin="0"];`
+    }
 
     private nodeSettings(node: Node) { 
         return ``//`style="filled" penwidth=1 fillcolor="white" fontname="Courier New" shape="Mrecord" `
@@ -118,7 +130,7 @@ export class DotGraph {
 
     private renderGraph(graph: Graph): string {
         return `subgraph cluster_${graph.id} {\n` + 
-                `\t\t${DotGraph.clusterPreamble}\n` + 
+                `\t\t${this.clusterPreamble()}\n` + 
                 `\t\tlabel="${graph.repr(true, true)} = ${this.renderNodeValue(graph)}";\n` + 
                 `\t${graph.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
     }
@@ -132,7 +144,12 @@ export class DotGraph {
                   `but N${field.pred_id} or N${field.succ_id} are not`
         }
 
-        return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD";`
+        if (pred.id === succ.id && this.opts.rankdir_lr) {
+            // special case for self-edges
+            return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD:e";`
+        } else {
+            return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD";`
+        }
     }
 
     private storeNodes(nodes: Array<Node>): string {
@@ -160,14 +177,15 @@ export class DotGraph {
     }
 
     private renderRefs(graph_nodes: Array<GraphNode>): string {
+        let constraint = this.opts.rankdir_lr ? `` : `constraint=false `
         return graph_nodes.map(ref_node => 
-            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}:"$HEAD" [constraint=false style=dotted];`).join('\n\t')
+            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}:"$HEAD" [${constraint}style=dotted];`).join('\n\t')
     }
 
     private __buffer: string
 
     constructor(public model: GraphModel, 
-                readonly isCarbon: boolean) {
+                readonly opts: RenderOpts) {
         
         // hash nodes by their ids and states by their names
         model.graphNodes.forEach(node => this.__graph_node_map.set(node.id, node))
@@ -178,6 +196,7 @@ export class DotGraph {
         let fields_hash = new Set<string>()
         model.fields.forEach(field => fields_hash.add(field.name))
 
+        // render the heap graph
         let graphs = model.graphs.map(graph => this.renderGraph(graph)).join('\n\t')
         let edges = model.fields.filter(field => 
             this.isFieldRef(field) && !this.isFieldValueNull(field)).map(field => 
@@ -190,8 +209,8 @@ export class DotGraph {
         let refs = this.renderRefs(local_refs)
         
         this.__buffer = `digraph g {\n` + 
-                        `\t${DotGraph.graphPreamble}\n` + 
-                        `\t${DotGraph.nodePreamble}\n` + 
+                        `\t${this.graphPreamble()}\n` + 
+                        `\t${this.nodePreamble()}\n` + 
                         `\t${store}\n` + 
                         `\t${graphs}\n` + 
                         `\t${refs}\n` + 
