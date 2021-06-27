@@ -1,6 +1,6 @@
 import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -280,8 +280,8 @@ export class Session {
         return Array.from(new_nonaliasing_nodes)
     }
 
-    private collectReach(nodes: Array<GraphNode>): Array<Relation> {
-        let reach_rel_names = ['exists_path', 'exists_path_']
+    private collectReach(nodes: Array<GraphNode>): Array<LocalRelation> {
+        let reach_rel_names = this.reachabilityRelationNames()
         
         // Extract reachability relations which are present in the model
         let useful_rels = reach_rel_names.filter(rel_name => {
@@ -289,7 +289,7 @@ export class Session {
             return rel_maybe !== undefined
         })
 
-        let reach_rels = new Set<Relation>()
+        let reach_rels = new Set<LocalRelation>()
         useful_rels.forEach(rel_name => 
             this.graphs.forEach(graph => 
                 nodes.forEach(pred_node => 
@@ -298,7 +298,7 @@ export class Session {
                         let rels = this.states!.map(state => {
                             let is_reachable = state_to_rels(state)
                             let r = is_reachable ? 'P' : '¬P'
-                            let new_rel = new Relation(r, state, pred_node.id, succ_node.id)
+                            let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id)
                             reach_rels.add(new_rel)
                         })
                         return rels
@@ -356,7 +356,7 @@ export class Session {
     private graph_nodes = new Array<GraphNode>()
     private scalar_nodes = new Array<Node>()
     private fields = new Array<Relation>()
-    private reach = new Array<Relation>()
+    private reach = new Array<LocalRelation>()
 
     private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1) {
         Logger.info(`iteration №${iteration} of analyzing the heap model`)
@@ -749,6 +749,14 @@ export class Session {
             } else {
                 return default_val
             }
+        }
+    }
+
+    private reachabilityRelationNames(): Array<string> {
+        if (this.isCarbon()) {
+            return ['exists_path', 'exists_path_']
+        } else {
+            return ['exists_path<Bool>', 'exists_path_<Bool>']
         }
     }
 

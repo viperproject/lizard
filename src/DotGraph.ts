@@ -1,4 +1,4 @@
-import { Graph, GraphModel, GraphNode, isNull, isRef, Node, Relation, State } from "./Models";
+import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Node, Relation, State } from "./Models";
 
 export interface RenderOpts {
     is_carbon: boolean,
@@ -8,9 +8,14 @@ export interface RenderOpts {
 export class DotGraph {
 
     private __state_map = new Map<string, State>()
+    private __graph_map = new Map<number, Graph>()
     private __graph_node_map = new Map<number, GraphNode>()
     private __scalar_node_map = new Map<number, Node>()
     
+    private getGraphById(graph_id: number): Graph | undefined {
+        return this.__graph_map.get(graph_id)
+    }
+
     private getGraphNodeById(node_id: number): GraphNode | undefined {
         return this.__graph_node_map.get(node_id)
     }
@@ -63,6 +68,10 @@ export class DotGraph {
     }
     private nodePreamble(): string {
         return `node [height=0 width=0 style="filled" penwidth=1 fillcolor="white" fontname="Helvetica" shape="none" margin="0"];`
+    }
+
+    private edgePreamble(): string {
+        return `edge [fontname="Helvetica"]`
     }
 
     private nodeSettings(node: Node) { 
@@ -155,6 +164,19 @@ export class DotGraph {
         }
     }
 
+    private renderReachRelation(rel: LocalRelation): string {
+        let graph = this.getGraphById(rel.graph_id)
+        let pred = this.getGraphNodeById(rel.pred_id)
+        let succ = this.getGraphNodeById(rel.succ_id)
+
+        if (graph === undefined || pred === undefined || succ === undefined) {
+            throw `graph, pred, and succ of a local reachability relation must be hashed at this point, ` + 
+                  `but some of these were not: G${rel.graph_id}, N${rel.pred_id}, or N${rel.succ_id}`
+        }
+
+        return `N${pred.id}:"$HEAD:e" -> N${succ.id}:"$HEAD" [label="${rel.name}" color="#0000ff5f" penwidth=3];`
+    }
+
     private storeNodes(nodes: Array<Node>): string {
         return nodes.map(node => {
             let repr: string
@@ -192,9 +214,10 @@ export class DotGraph {
                 readonly opts: RenderOpts) {
         
         // hash nodes by their ids and states by their names
+        model.states.forEach(state => this.__state_map.set(state.name, state))
+        model.graphs.forEach(graph => this.__graph_map.set(graph.id, graph))
         model.graphNodes.forEach(node => this.__graph_node_map.set(node.id, node))
         model.scalarNodes.forEach(node => this.__scalar_node_map.set(node.id, node))
-        model.states.forEach(state => this.__state_map.set(state.name, state))
 
         // collect all field names used in the model
         let fields_hash = new Set<string>()
@@ -208,6 +231,10 @@ export class DotGraph {
         let edges = model.fields.filter(field => 
             this.isFieldRef(field) && !this.isFieldValueNull(field)).map(field => 
                 this.renderFieldRelation(field)).join('\n\t')
+            
+        // Reachability-related stuff
+        let reach = model.reach.filter(rel => rel.pred_id !== rel.succ_id)
+                .map(rel => this.renderReachRelation(rel)).join('\n\t')
         
         // render the local store
         let local_refs = model.graphNodes.filter(n => n.isLocal)
@@ -218,10 +245,13 @@ export class DotGraph {
         this.__buffer = `digraph g {\n` + 
                         `\t${this.graphPreamble()}\n` + 
                         `\t${this.nodePreamble()}\n` + 
+                        `\t${this.edgePreamble()}\n` + 
                         `\t${store}\n` + 
                         `\t${graphs}\n` + 
                         `\t${outer_nodes}\n` + 
                         `\t${refs}\n` + 
-                        `\t${edges}\n}`
+                        `\t${edges}\n` + 
+                        `\t${reach}\n` + 
+                        `}`
     }
 }

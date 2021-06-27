@@ -184,13 +184,25 @@ export class Graph extends Node {
 
 
 export class Relation {
-    private _: string
+    protected _: string
     constructor(readonly name: string,  // e.g. "NEXT", "edge", or "exists_path"
                 readonly state: State,  // e.g. { name: "Heap@@1", val: "T@U!val!11" }
                 readonly pred_id: number, 
                 readonly succ_id: number) {
     
         this._ = `${name}[ ${state.name} ](N${pred_id}, N${succ_id})`
+    }
+}
+
+export class LocalRelation extends Relation {
+    constructor(readonly name: string, 
+                readonly state: State, 
+                readonly graph_id: number, 
+                readonly pred_id: number, 
+                readonly succ_id: number) {
+    
+        super(name, state, pred_id, succ_id)
+        this._ = `${name}[ ${state.name} ](G${graph_id}, N${pred_id}, N${succ_id})`
     }
 }
 
@@ -207,7 +219,7 @@ export class GraphModel {
         public scalarNodes: Array<Node> = [],
 
         public fields: Array<Relation> = [],
-        public reach: Array<Relation> = [],
+        public reach: Array<LocalRelation> = [],
 
         public equivalence_classes: EquivClasses = new EquivClasses()) {}
 }
