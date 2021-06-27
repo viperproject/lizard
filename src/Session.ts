@@ -248,9 +248,10 @@ export class Session {
         let new_nonaliasing_nodes = new Set<Node>()
 
         nodes.forEach(node => {
-            if (node.aliases.length > 1) {
-                throw `aliasing node ${JSON.stringify(node)} is expected to have only one internal name`
-            }
+            // TODO: decide what to check and/or report in this case
+            // if (node.aliases.length > 1) {
+            //     Logger.warn(`...`)
+            // }
             let node_name = node.aliases[0]
 
             let key = EquivClasses.key(node.val, node.type)
@@ -289,7 +290,7 @@ export class Session {
         })
 
         // Deduce relations for each field, node, state
-        let state_to_field_val_funs = useful_fields.flatMap(fname => 
+        let field_relations = useful_fields.flatMap(fname => 
             nodes.flatMap(node => {
                 let state_to_rels = this.collectFieldValueInfo(node, fname)
                 let rels = this.states!.map(state => {
@@ -300,7 +301,7 @@ export class Session {
                 return rels
             }))
 
-        return state_to_field_val_funs
+        return field_relations
     }
 
     private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Set<Graph>): void {
@@ -471,15 +472,25 @@ export class Session {
             let key = EquivClasses.key(succ_innerval, field_type)
             let succ: Node
             if (this.nonAliasingNodesMap.has(key)) {
-                // succ is a representative of multiple aliasing nodes
+                // succ already has a representative node
                 succ = this.nonAliasingNodesMap.get(key)!
             } else {
-                // this is a fresh value; create a new atom to support it
-                let name = `${node.aliases}.${fname}`
-                succ = this.mkNode(name, succ_innerval, false, field_type)
-                Logger.info(`no atom found for value ${succ_innerval} of ${name}; adding transitive node with id ${succ.id}`)
+                // this is a fresh value; create a new atom (per alias) to support it
+                Logger.info(`no atom found for value ${succ_innerval} of type ${field_type}; ` + 
+                            `adding transitive node(s): `)
+                let aliasing_succs = node.aliases.map(pred_alias_name => {
+                    // All aliases of [[node]] yield new aliasing fresh nodes. 
+                    //  E.g.: {X.next, Y.next, Z.next} alias if {X, Y, Z} alias. 
+                    // Note that we postpone the alias analysis until the next iteration of the core algorithm, 
+                    //  at which stage all transitive nodes are going to be processed. 
+                    let alias_name = `${pred_alias_name}.${fname}[${state.name}]`
+                    let alias = this.mkNode(alias_name, succ_innerval, false, field_type)
+                    this.transitive_nodes.set(alias.id, alias)
+                    Logger.info(` ${alias.repr(true, true)}`)
+                    return alias
+                })
+                succ = aliasing_succs.pop()!
                 this.nonAliasingNodesMap.set(key, succ)
-                this.transitive_nodes.set(succ.id, succ)
             }
             return succ
         }
