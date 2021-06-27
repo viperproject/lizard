@@ -1,4 +1,4 @@
-import { Graph, GraphModel, GraphNode, isRef, Node, Relation, State } from "./Models";
+import { Graph, GraphModel, GraphNode, isNull, isRef, Node, Relation, State } from "./Models";
 
 export interface RenderOpts {
     is_carbon: boolean,
@@ -20,6 +20,9 @@ export class DotGraph {
     }
 
     private renderNodeValue(node: Node): string {
+        if (isNull(node)) {
+            return 'null'
+        }
         let val_id = this.renderValue(node.val)
         if (val_id === node.val) {
             // Literal values do not require type prefix

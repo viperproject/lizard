@@ -72,6 +72,10 @@ export function isRef(type: ViperType): boolean {
     return type.typename === 'Ref'
 }
 
+export function isNull(node: Node): boolean {
+    return node.type.typename === 'Ref' && (<GraphNode> node).isNull
+}
+
 export function isSetOfRefs(type: ViperType): boolean {
     return type.typename === 'Set[Ref]'
 }
@@ -203,8 +207,7 @@ export class GraphModel {
         public scalarNodes: Array<Node> = [],
 
         public fields: Array<Relation> = [],
-        public edges: Array<Relation> = [],
-        public paths: Array<Relation> = [],
+        public reach: Array<Relation> = [],
 
         public equivalence_classes: EquivClasses = new EquivClasses()) {}
 }

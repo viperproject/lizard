@@ -1,3 +1,4 @@
+import { node } from "webpack"
 import { Logger } from "./logger"
 import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType } from "./Models"
 import { Query } from "./Query"
@@ -279,6 +280,33 @@ export class Session {
         return Array.from(new_nonaliasing_nodes)
     }
 
+    private collectReach(nodes: Array<GraphNode>): Array<Relation> {
+        let reach_rel_names = ['exists_path', 'exists_path_']
+        
+        // Extract reachability relations which are present in the model
+        let useful_rels = reach_rel_names.filter(rel_name => {
+            let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
+            return rel_maybe !== undefined
+        })
+
+        let reach_rels = new Set<Relation>()
+        useful_rels.forEach(rel_name => 
+            this.graphs.forEach(graph => 
+                nodes.forEach(pred_node => 
+                    nodes.forEach(succ_node => {
+                        let state_to_rels = this.collectReachInfo(rel_name, graph, pred_node, succ_node)
+                        let rels = this.states!.map(state => {
+                            let is_reachable = state_to_rels(state)
+                            let r = is_reachable ? 'P' : '¬P'
+                            let new_rel = new Relation(r, state, pred_node.id, succ_node.id)
+                            reach_rels.add(new_rel)
+                        })
+                        return rels
+                    }))))
+
+        return Array.from(reach_rels)
+    }
+ 
     private collectFields(nodes: Array<GraphNode>): Array<Relation> {
         let fnames = this.getDefinitionNames('Field')
 
@@ -328,6 +356,7 @@ export class Session {
     private graph_nodes = new Array<GraphNode>()
     private scalar_nodes = new Array<Node>()
     private fields = new Array<Relation>()
+    private reach = new Array<Relation>()
 
     private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1) {
         Logger.info(`iteration №${iteration} of analyzing the heap model`)
@@ -360,11 +389,16 @@ export class Session {
         // D. Determine which Ref-based nodes belong to which graphs (i.e. Set[Ref]-based nodes)
         this.connectNodesToGraphs(new_graph_nodes, this.graphs)
 
-        // E. Collect information about fields  
-        let new_fields = this.collectFields(new_graph_nodes.filter(n => !n.isNull))
+        // E1. Collect information about fields  
+        let non_null_nodes = new_graph_nodes.filter(n => !n.isNull)
+        let new_fields = this.collectFields(non_null_nodes)
         this.fields.push(...new_fields)
 
-        // F. Some of the fields may lead to new nodes that must be encountered for in the model. 
+        // E2. Collect reachability information
+        let reach = this.collectReach(non_null_nodes)
+        this.reach.push(...reach)
+
+        // F1. Some of the relations may lead to new nodes that must be encountered for in the model. 
         let trans_nodes = Array.from(this.transitive_nodes.values())
         this.transitive_nodes = new Map<number, Node>()
 
@@ -377,7 +411,7 @@ export class Session {
 
         // H. Return model
         this.graphModel = new GraphModel(this.states!, Array.from(this.graphs), this.graph_nodes, this.scalar_nodes, 
-                                         this.fields, [], [], this.equiv_classes)
+                                         this.fields, this.reach, this.equiv_classes)
 
         return this.graphModel!
     }
@@ -452,6 +486,49 @@ export class Session {
     private collectDependentEntries(dep_value: string): Array<[Array<string>, ModelEntry]> {
         return Object.entries(this.model!).flatMap(entry => 
             this.collectDependentEntriesRec([entry[0]], entry[1], dep_value))
+    }
+
+    private collectReachInfo(rel_name: string, graph: Graph, 
+                             pred_node: GraphNode, succ_node: GraphNode): (state: State) => boolean {
+
+        /** Step 1 -- decode the reachability function that depends on an edge graph */
+        let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
+        if (!rel_maybe) {
+            throw `model does not contain the expected relation '${rel_name}'`
+        } 
+        let rel = rel_maybe![1]
+        if (rel.type !== 'map_entry') {
+            throw `reachability relation '${rel_name}' must be of type 'map_entry'`
+        }
+        // e.g. exists_path(EG: Set[Edge], x: Ref, y: Ref): Bool
+        let outer_fun = this.partiallyApplyReachabilityRelation(<MapEntry> rel, pred_node.val, succ_node.val)
+        
+
+        /** Step 2 -- decode the snapshot function that takes a state and yields an edge graph */
+        
+        let $$_maybe = Object.entries(this.model!).find(pair => pair[0] === '$$')
+        if (!$$_maybe) {
+            throw `model does not contain the expected relation '$$'`
+        }
+        let $$ = $$_maybe![1]
+        
+        // e.g. $$(h: Heap, g: Set[Ref]): Set[Edge]
+        let inner_fun = (state: string) => Session.appleEntry($$, [state, graph.val])
+        
+
+        /** Step 3 -- combine the decoded functions */
+        return (state: State) => {
+            let edge_graph = inner_fun(state.val)
+            let predicate_val = outer_fun(edge_graph)
+            if (predicate_val !== 'true' && predicate_val !== 'false') {
+                throw `got unexpected value for a reachability predicate: ${predicate_val}`
+            }
+            if (predicate_val === 'true') {
+                return true
+            } else {
+                return false
+            }
+        }
     }
 
     private collectFieldValueInfo(node: Node, fname: string): (state: State) => Node {
@@ -605,8 +682,39 @@ export class Session {
         }).map(pair => new State(pair[0], (<ConstantEntry> pair[1]).value))
     }
 
-    private partiallyApplyFieldMapEntry(m_entry: MapEntry, reciever: string, field: string | undefined): (state: string) => string {
+    private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => string {
+        let res_map = new Map<string, string>()
 
+        m_entry.cases.forEach(map_case => {
+            let edge_graph_entry = map_case.args[0]
+            let edge_graph = getConstantEntryValue(edge_graph_entry)
+
+            // Check if this case matches the provided partial arguments
+            let first_entry = map_case.args[1]
+            let first = getConstantEntryValue(first_entry)
+
+            let second_entry = map_case.args[2]
+            let second = getConstantEntryValue(second_entry)
+
+            if (first === pred && second === succ) {
+                let val = getConstantEntryValue(map_case.value)
+                res_map.set(edge_graph, val)
+            }
+        })
+
+        let default_entry = m_entry.default
+        let default_val = getConstantEntryValue(default_entry)
+
+        return (edge_graph: string) => {
+            if (res_map.has(edge_graph)) {
+                return res_map.get(edge_graph)!
+            } else {
+                return default_val
+            }
+        }
+    }
+
+    private partiallyApplyFieldMapEntry(m_entry: MapEntry, reciever: string, field: string | undefined): (state: string) => string {
         let res_map = new Map<string, string>()
 
         m_entry.cases.forEach(map_case => {
