@@ -429,10 +429,12 @@ export class Session {
         let selected_states = new Set<string>(query.states)
         let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.name))
         let filtered_states = this.graphModel!.states.filter(state => selected_states.has(state.name))
+        let filtered_reach = this.graphModel!.reach.filter(rel => selected_states.has(rel.state.name))
         this.latestQuery = new GraphModel()
         Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
         this.latestQuery!.states = filtered_states
+        this.latestQuery!.reach = filtered_reach
         
         return this.latestQuery!
     }
