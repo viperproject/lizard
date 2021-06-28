@@ -30,6 +30,34 @@ export class Session {
         return this.backend.includes('carbon')
     }
 
+    private is_carbon_type_enc_a: boolean | undefined = undefined
+    public isCarbonTypeEncodingA(): boolean {
+        if (!this.isCarbon()) {
+            return false
+        }
+        if (this.is_carbon_type_enc_a === undefined) {
+            let boogie_large_maps = Object.entries(this.model!).filter(pair => pair[0] === '[7]')
+            let boogie_short_maps = Object.entries(this.model!).filter(pair => pair[0] === '[3]')
+            if (boogie_large_maps.length > 0 && boogie_short_maps.length > 0 || 
+                boogie_large_maps.length === 0 && boogie_short_maps.length === 0) {
+                throw `heuristic failed to identify Boogie's type encoding schema`
+            } 
+            let res =  boogie_large_maps.length > 0
+            this.is_carbon_type_enc_a = res
+            Logger.info(`according to the heuristic, this example uses Boogie type encoding ${res ? 'A (argument-based)' : 'P (predicate-based)'}`)
+            return res
+        } else {
+            return this.is_carbon_type_enc_a
+        }
+    }
+
+    public isCarbonTypeEncodingP(): boolean {
+        if (!this.isCarbon()) {
+            return false
+        }
+        return !this.isCarbonTypeEncodingA()
+    }
+
     private viperTypes: ViperTypesProvider | undefined = undefined
     
     constructor(public backend: string, 
@@ -358,7 +386,7 @@ export class Session {
     private fields = new Array<Relation>()
     private reach = new Array<LocalRelation>()
 
-    private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1) {
+    private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1): GraphModel {
         Logger.info(`iteration №${iteration} of analyzing the heap model`)
         
         // A. Update hash s.t. nodes can be retrieved efficiently, via their IDs
@@ -389,16 +417,12 @@ export class Session {
         // D. Determine which Ref-based nodes belong to which graphs (i.e. Set[Ref]-based nodes)
         this.connectNodesToGraphs(new_graph_nodes, this.graphs)
 
-        // E1. Collect information about fields  
+        // E. Collect information about fields  
         let non_null_nodes = new_graph_nodes.filter(n => !n.isNull)
         let new_fields = this.collectFields(non_null_nodes)
         this.fields.push(...new_fields)
 
-        // E2. Collect reachability information
-        let reach = this.collectReach(non_null_nodes)
-        this.reach.push(...reach)
-
-        // F1. Some of the relations may lead to new nodes that must be encountered for in the model. 
+        // F. Some of the relations may lead to new nodes that must be encountered for in the model. 
         let trans_nodes = Array.from(this.transitive_nodes.values())
         this.transitive_nodes = new Map<number, Node>()
 
@@ -419,8 +443,15 @@ export class Session {
     public produceGraphModel(): GraphModel {
         // O. Collect initial nodes
         let starting_atoms = this.collectInitialGraphsAndNodes()
+
         // I. Process and Saturate! 
-        return this.produceGraphModelRec(starting_atoms)
+        let gm = this.produceGraphModelRec(starting_atoms)
+
+        // J. Collect reachability information
+        let non_null_nodes = gm.graphNodes.filter(n => !n.isNull)
+        let reach = this.collectReach(non_null_nodes)
+        gm.reach = reach
+        return gm
     }
 
     public applyQuery(query: Query): GraphModel {
@@ -594,7 +625,8 @@ export class Session {
       *              type: "constant_entry"
       *              value: "$Ref!val!1"
       */
-     private static evalEntry(entry: ModelEntry, args: Array<string>): string {
+     private static __wildcard_symbol = '@@wild@card@@'
+     private static evalEntry(entry: ModelEntry, args: Array<string | undefined>): string {
         if (entry.type === 'constant_entry') {
             return getConstantEntryValue(entry)
 
@@ -614,10 +646,21 @@ export class Session {
                 return sub_results[0] === 'true' ? 'false' : 'true'
             } else if (fun === '=') {
                 // check that all arguments of '=' evaluate to the same value
-                return (new Set(sub_results)).size === 1 ? 'true' : 'false'
+                let sub_result_set = new Set(sub_results)
+                if (sub_result_set.size === 1) {
+                    // All arguments are equal
+                    return 'true'
+                } else if (sub_result_set.size === 2 && sub_result_set.has(this.__wildcard_symbol)) {
+                    // All arguments are either equal to some value or match a wildcard argument
+                    return 'true'
+                } else {
+                    // Some arguments did not match this case
+                    return 'false'
+                }
             } else if (fun === ':var') {
                 let arg_index = parseInt(getConstantEntryValue(fun_args[0]))
-                return args[arg_index]
+                let arg = args[arg_index]
+                return arg === undefined ? this.__wildcard_symbol : arg
             } else {
                 throw `unsupported function: '${fun}'`
             }
@@ -627,7 +670,7 @@ export class Session {
         }
     }
 
-    static appleEntry(entry: ModelEntry, args: Array<string>): string {
+    static appleEntry(entry: ModelEntry, args: Array<string | undefined>): string {
         if (entry.type === 'constant_entry') {
             let const_entry = <ConstantEntry> entry
             return const_entry.value
@@ -639,6 +682,10 @@ export class Session {
             let res_entry_maybe = map_entry.cases.find(map_case => {
                 
                 let matches = args.map((arg, index) => {
+                    if (arg === undefined) {
+                        // this is a wildcard argument
+                        return true
+                    }
                     let case_arg = getConstantEntryValue(map_case.args[index])
                     return arg === case_arg
                 })
@@ -719,16 +766,37 @@ export class Session {
     private partiallyApplyFieldMapEntry(m_entry: MapEntry, reciever: string, field: string | undefined): (state: string) => string {
         let res_map = new Map<string, string>()
 
+        let state_index: number
+        let object_index: number
+        let field_index: number | undefined
+        if (this.isCarbonTypeEncodingA()) {
+            //                                 0    1    2       3       4    5
+            // typeEncoding:a -- MapType0Store A@@2 B@@2 RefType Heap@@6 o@@2 f_2@@2 v)
+            state_index = 3
+            object_index = 4
+            field_index = 5
+        } else if (this.isCarbonTypeEncodingP()) {
+            state_index = 0
+            object_index = 1
+            field_index = 2
+        } else {
+            // silicon
+            state_index = 0
+            object_index = 1
+            field_index = undefined
+        }
+
         m_entry.cases.forEach(map_case => {
-            let state_entry = map_case.args[0]
+            let state_entry = map_case.args[state_index]
             let state = getConstantEntryValue(state_entry)
 
             // Check if this case matches the provided partial arguments
-            let first_entry = map_case.args[1]
+            let first_entry = map_case.args[object_index]
             let first = getConstantEntryValue(first_entry)
         
             if (field) {
-                let second_entry = map_case.args[2]
+                // this is Carbon
+                let second_entry = map_case.args[field_index!]
                 let second = getConstantEntryValue(second_entry)
                 if (first === reciever && second === field) {
                     let val = getConstantEntryValue(map_case.value)
@@ -756,22 +824,33 @@ export class Session {
 
     private reachabilityRelationNames(): Array<string> {
         if (this.isCarbon()) {
-            return ['exists_path', 'exists_path_']
+            return ['exists_path']
         } else {
-            return ['exists_path<Bool>', 'exists_path_<Bool>']
+            return ['exists_path<Bool>']
         }
     }
 
     private fieldLookupRelationName(fname: string): string {
-        return this.isCarbon() ? '[3]' : `$FVF.lookup_${fname}`
+        return this.isCarbon() 
+        ? (this.isCarbonTypeEncodingA() ? '[7]' : '[3]') 
+        : `$FVF.lookup_${fname}`
     }
 
     private setIncludesRelationName(): string {
-        return this.isCarbon() ? '[2]' : 'Set_in'
+        if (this.isCarbonTypeEncodingA()) {
+            return '[4]'
+        } else if (this.isCarbonTypeEncodingP()) {
+            return '[2]'
+        } else {
+            // silicon
+            return 'Set_in'
+        }
     }
 
     private applySetInMapEntry(entry: ModelEntry, graph: Graph, node: GraphNode): string {
-        if (this.isCarbon()) {
+        if (this.isCarbonTypeEncodingA()) {
+            return Session.appleEntry(entry, [undefined, undefined, graph.val, node.val])
+        } else if (this.isCarbonTypeEncodingP()) {
             return Session.appleEntry(entry, [graph.val, node.val])
         } else {
             return Session.appleEntry(entry, [node.val, graph.val])

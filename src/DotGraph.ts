@@ -5,12 +5,18 @@ export interface RenderOpts {
     rankdir_lr: boolean
 }
 
+type ReachKey = string
+function ReachKey(state: State, graph_id: number, pred_id: number, succ_id: number): string {
+    return `${state.name}|${graph_id}|${pred_id}|${succ_id}`
+}
+
 export class DotGraph {
 
     private __state_map = new Map<string, State>()
     private __graph_map = new Map<number, Graph>()
     private __graph_node_map = new Map<number, GraphNode>()
     private __scalar_node_map = new Map<number, Node>()
+    private __reach_map = new Map<ReachKey, LocalRelation>()
     
     private getGraphById(graph_id: number): Graph | undefined {
         return this.__graph_map.get(graph_id)
@@ -22,6 +28,10 @@ export class DotGraph {
 
     private getScalarNodeById(node_id: number): Node | undefined {
         return this.__scalar_node_map.get(node_id)
+    }
+
+    private getReachability(state: State, graph_id: number, pred_id: number, succ_id: number): LocalRelation | undefined {
+        return this.__reach_map.get(ReachKey(state, graph_id, pred_id, succ_id))
     }
 
     private renderNodeValue(node: Node): string {
@@ -60,18 +70,18 @@ export class DotGraph {
 
     private graphPreamble(): string {
         let rankdir = this.opts.rankdir_lr ? ` rankdir="LR" ` : ``
-        let nodesep = this.opts.rankdir_lr ? `` : ` nodesep="0.5pt" `
-        return `graph [outputorder="nodesfirst" labelloc="t" label="" fontname="Helvetica" ${nodesep} ranksep="1pt" overlap=false ${rankdir}];`
+        let nodesep = this.opts.rankdir_lr ? ` nodesep=0.5 ` : ` nodesep=0.5 `
+        return `graph [outputorder="nodesfirst" label="" fontname="Helvetica" ${nodesep} ranksep=0.5 ${rankdir}];`
     }
     private clusterPreamble(): string { 
-        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin="40pt"];`
+        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin=12];`
     }
     private nodePreamble(): string {
-        return `node [height=0 width=0 style="filled" penwidth=1 fillcolor="white" fontname="Helvetica" shape="none" margin="0"];`
+        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=0.03];`
     }
 
     private edgePreamble(): string {
-        return `edge [fontname="Helvetica"]`
+        return `edge [fontname="Helvetica" arrowsize=0.4]`
     }
 
     private nodeSettings(node: Node) { 
@@ -124,7 +134,7 @@ export class DotGraph {
                 val = this.renderNodeValue(succ)
             }
 
-            return `<TR><TD align="text" PORT="${field.name}@${field.state.name}">` + 
+            return `<TR><TD align="text" BGCOLOR="#ffffff" PORT="${field.name}@${field.state.name}">` + 
                 `${field.name}${state}` +
                 (this.isFieldValueNull(field) ? ` = null` : (!this.isFieldRef(field) ? ` = ${val}` : ``)) +
                 `<BR ALIGN="left" /></TD></TR>`
@@ -133,8 +143,9 @@ export class DotGraph {
     }
 
     private renderNode(node: GraphNode): string {
+        let head_label = node.isLocal ? `${node.proto} = ${this.renderNodeValue(node)}` : this.renderNodeValue(node)
         let table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
-                    `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>${this.renderNodeValue(node)}</B></FONT></TD></TR>\n` + 
+                    `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>${head_label}</B></FONT></TD></TR>\n` + 
                     `\t\t` + this.nodeFields(node) + 
                     `\t\t</TABLE>`
         return `"N${node.id}" [${this.nodeSettings(node)} label=<${table}> ];`
@@ -158,13 +169,13 @@ export class DotGraph {
 
         if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
-            return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD:e";`
+            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD":e;`
         } else {
-            return `N${pred.id}:"${field.name}@${field.state.name}:e" -> N${succ.id}:"$HEAD";`
+            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD";`
         }
     }
 
-    private renderReachRelation(rel: LocalRelation): string {
+    private renderReachRelation(rel: LocalRelation, is_mutual: boolean): string {
         let graph = this.getGraphById(rel.graph_id)
         let pred = this.getGraphNodeById(rel.pred_id)
         let succ = this.getGraphNodeById(rel.succ_id)
@@ -174,7 +185,16 @@ export class DotGraph {
                   `but some of these were not: G${rel.graph_id}, N${rel.pred_id}, or N${rel.succ_id}`
         }
 
-        return `N${pred.id}:"$HEAD:e" -> N${succ.id}:"$HEAD" [label="${rel.name}" color="#0000ff5f" penwidth=3];`
+        let state = (this.__state_map.size > 1) ? `<SUB>${rel.state.name}</SUB>` : ``
+        let label = `<${rel.name}${state}>`
+        let dashed = rel.name === 'P' ? `` : `style="dashed"`
+        // let constrant = rel.name === 'P' ? `true` : `false`
+        let constrant = rel.name === `true`
+        if (is_mutual) {
+            return `N${pred.id} -> N${succ.id} [label=${label} color="#0000ff5f" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ];`
+        } else {
+            return `N${pred.id} -> N${succ.id} [label=${label} color="#0000ff5f" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ];`
+        }
     }
 
     private storeNodes(nodes: Array<Node>): string {
@@ -208,6 +228,31 @@ export class DotGraph {
             `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}:"$HEAD" [${constraint}style=dotted];`).join('\n\t')
     }
 
+    private renderReachRelations(rels: Array<LocalRelation>): string {
+        let rendered_rels = new Set<LocalRelation>()
+        let res = rels.filter(rel => rel.pred_id !== rel.succ_id)
+                .flatMap(rel => {
+                    let dual_rel = this.getReachability(rel.state, rel.graph_id, rel.succ_id, rel.pred_id)
+                    if (dual_rel === undefined || rel.name !== dual_rel.name) {
+                        // No dual relation, thus we need to render it
+                        rendered_rels.add(rel)
+                        return [this.renderReachRelation(rel, false)]
+                    } else {
+                        // There exists a dual relation, so we want to render these two as a bi-directional edge
+                        // But first check that we haven't rendered it before
+                        if (!rendered_rels.has(rel)) {
+                            rendered_rels.add(rel)
+                            rendered_rels.add(dual_rel)
+                            return [this.renderReachRelation(rel, true)]
+                        } else {
+                            return []
+                        }
+                    } 
+                }).join('\n\t')
+
+        return res
+    }
+
     private __buffer: string
 
     constructor(public model: GraphModel, 
@@ -218,6 +263,7 @@ export class DotGraph {
         model.graphs.forEach(graph => this.__graph_map.set(graph.id, graph))
         model.graphNodes.forEach(node => this.__graph_node_map.set(node.id, node))
         model.scalarNodes.forEach(node => this.__scalar_node_map.set(node.id, node))
+        model.reach.forEach(rel => this.__reach_map.set(ReachKey(rel.state, rel.graph_id, rel.pred_id, rel.succ_id), rel))
 
         // collect all field names used in the model
         let fields_hash = new Set<string>()
@@ -233,8 +279,7 @@ export class DotGraph {
                 this.renderFieldRelation(field)).join('\n\t')
             
         // Reachability-related stuff
-        let reach = model.reach.filter(rel => rel.pred_id !== rel.succ_id)
-                .map(rel => this.renderReachRelation(rel)).join('\n\t')
+        let reach = this.renderReachRelations(model.reach)
         
         // render the local store
         let local_refs = model.graphNodes.filter(n => n.isLocal)
