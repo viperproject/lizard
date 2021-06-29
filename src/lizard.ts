@@ -5,7 +5,7 @@ import { viperApi } from './extension'
 import { Logger, LogLevel } from './logger'
 import { GraphModel } from './Models'
 import { Query } from './Query'
-import { Session } from './Session'
+import { Session, SessionOpts } from './Session'
 import { ViperLocation } from "./ViperAST"
 
 export namespace Lizard {
@@ -13,9 +13,10 @@ export namespace Lizard {
     var session: Session | undefined = undefined
     var panel: DebuggerPanel | undefined = undefined
     var sessionCounter = 0
-    const renderOpts: RenderOpts = {
-        is_carbon: false, 
-        rankdir_lr: false
+    const lizardOpts: RenderOpts & SessionOpts = {
+        is_carbon: false,
+        is_carbon_type_encoding_a: false,
+        rankdir_lr: false,
     }
 
     export function stop() {
@@ -25,15 +26,28 @@ export namespace Lizard {
     export function start(context: vscode.ExtensionContext, activeEditor: vscode.TextEditor) {
         Logger.setLogLevel(LogLevel.DEBUG)
         Logger.debug(`Created namespace Lizard.`)
+
+        viperApi.registerServerMessageCallback('backend_configuration', (messageType: string, message: any) => {
+            Logger.debug(`recieved message of type 'backend_configuration'`)
+
+            lizardOpts.is_carbon = viperApi.getBackendName().toLowerCase().includes('carbon')
+            if (lizardOpts.is_carbon) {
+                lizardOpts.is_carbon_type_encoding_a = message.msg_body.stages[0].customArguments.toLowerCase().includes('/typeencoding:a')
+            } else {
+                lizardOpts.is_carbon_type_encoding_a = false
+            }
+
+            Logger.debug(`inferred Lizard configuration: ${JSON.stringify(lizardOpts)}`)
+        })
         
         viperApi.registerServerMessageCallback('program_definitions', (messageType: string, message: any) => {
             Logger.debug(`recieved message of type 'program_definitions'`)
             
-            session = new Session(viperApi.getBackendName())
+            session = new Session(lizardOpts)
             session.parseProgramDefinitions(message.msg_body.definitions)
 
             // Initialize rendering options
-            renderOpts.is_carbon = session.isCarbon()
+            lizardOpts.is_carbon = session.isCarbon()
         
             if (panel) panel!.dispose()
             panel = new DebuggerPanel(context.extensionPath, handleQuery, handleToggleGraphRankDirRequest)
@@ -61,7 +75,7 @@ export namespace Lizard {
         function tryRenderGraph(graph_model: GraphModel): boolean {
             let dot_graph: DotGraph
             try {
-                dot_graph = new DotGraph(graph_model, renderOpts!)
+                dot_graph = new DotGraph(graph_model, lizardOpts)
             } catch (error) {
                 Logger.error(`DotGraph() reached an exceptional situation: ${error}`)
                 return false
@@ -97,7 +111,7 @@ export namespace Lizard {
 
         function handleToggleGraphRankDirRequest() {
             Logger.info(`✓ processed toggle-rankdir request`)
-            renderOpts!.rankdir_lr = ! (renderOpts!.rankdir_lr!)
+            lizardOpts.rankdir_lr = !(lizardOpts.rankdir_lr)
             render()
         }
         

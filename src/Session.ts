@@ -5,6 +5,11 @@ import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
 
+export interface SessionOpts {
+    is_carbon: boolean
+    is_carbon_type_encoding_a: boolean
+}
+
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
     public errorLocation: ViperLocation | undefined = undefined   // e.g. "30:22" meaning line 30, column 22
@@ -24,43 +29,24 @@ export class Session {
     }
 
     public isSilicon(): boolean {
-        return this.backend.includes('silicon')
+        return !this.opts.is_carbon
     }
     public isCarbon(): boolean {
-        return this.backend.includes('carbon')
+        return this.opts.is_carbon
     }
 
-    private is_carbon_type_enc_a: boolean | undefined = undefined
+    // private is_carbon_type_enc_a: boolean | undefined = undefined
     public isCarbonTypeEncodingA(): boolean {
-        if (!this.isCarbon()) {
-            return false
-        }
-        if (this.is_carbon_type_enc_a === undefined) {
-            let boogie_large_maps = Object.entries(this.model!).filter(pair => pair[0] === '[7]')
-            let boogie_short_maps = Object.entries(this.model!).filter(pair => pair[0] === '[3]')
-            if (boogie_large_maps.length > 0 && boogie_short_maps.length > 0 || 
-                boogie_large_maps.length === 0 && boogie_short_maps.length === 0) {
-                throw `heuristic failed to identify Boogie's type encoding schema`
-            } 
-            let res =  boogie_large_maps.length > 0
-            this.is_carbon_type_enc_a = res
-            Logger.info(`according to the heuristic, this example uses Boogie type encoding ${res ? 'A (argument-based)' : 'P (predicate-based)'}`)
-            return res
-        } else {
-            return this.is_carbon_type_enc_a
-        }
+        return this.opts.is_carbon && this.opts.is_carbon_type_encoding_a
     }
 
     public isCarbonTypeEncodingP(): boolean {
-        if (!this.isCarbon()) {
-            return false
-        }
-        return !this.isCarbonTypeEncodingA()
+        return this.opts.is_carbon && !this.opts.is_carbon_type_encoding_a
     }
 
     private viperTypes: ViperTypesProvider | undefined = undefined
     
-    constructor(public backend: string, 
+    constructor(public opts: SessionOpts, 
                 private __next_node_id = 0) {}
 
     private freshNodeId(): number {

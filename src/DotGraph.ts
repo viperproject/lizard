@@ -74,10 +74,10 @@ export class DotGraph {
         return `graph [outputorder="nodesfirst" label="" fontname="Helvetica" ${nodesep} ranksep=0.5 ${rankdir}];`
     }
     private clusterPreamble(): string { 
-        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin=12];`
+        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin=18];`
     }
     private nodePreamble(): string {
-        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=0.03];`
+        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=0.05];`
     }
 
     private edgePreamble(): string {
