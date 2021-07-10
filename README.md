@@ -21,5 +21,8 @@ To compile the project:
 5. start the extension from the debug panel in VS Code 
 6. run ```vsce package``` to assemble a portable distribution bundle
 
+# Dependencies
+To use Lizard, you first need to install the Viper extension for your Visual Studio Code installation. Viper is a JVM server application, so you'll also need Java. For more details, see [Download and Install Viper](http://viper.ethz.ch/downloads/).
+
 # Historical note
 This extension is a follow-up project to the family of verification debugger prototypes developed as student projects at the Programming Methodology Group at ETH Zurich. In particular, some code is borrowed from Alessio Aurrechia's Master thesis project (which used symbolic execution traces and Alloy models, as opposed to Z3 models, to extract possible counterexamples). 
