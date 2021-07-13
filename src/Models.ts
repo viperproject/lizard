@@ -68,6 +68,18 @@ export class PrimitiveTypes {
     public static readonly Perm = PrimitiveTypes.perm_type
 }
 
+export function isBool(type: ViperType): boolean {
+    return type.typename === 'Bool'
+}
+
+export function isInt(type: ViperType): boolean {
+    return type.typename === 'Int'
+}
+
+export function isPerm(type: ViperType): boolean {
+    return type.typename === 'Perm'
+}
+
 export function isRef(type: ViperType): boolean {
     return type.typename === 'Ref'
 }
@@ -143,7 +155,7 @@ export class Node {
                 readonly id: number,                    // 0, 1, 2, ...
                 public val: string,                     // e.g. "$Ref!val!0"
                 readonly isLocal: boolean,             // whether this ndoe is refer to from the program store
-                public proto: string | undefined = undefined) { // e.g. "X"
+                public proto: Array<string> = []) { // e.g. "X"
     
         this._ = this.repr()
         // A node's pretty representation is computed dynamically since the fields are mutable. 
@@ -163,7 +175,7 @@ export class GraphNode extends Node {
                 readonly id: number,
                 public val: string,
                 readonly isLocal: boolean,
-                public proto: string | undefined = undefined) {
+                public proto: Array<string> = []) {
         
         super(aliases, PrimitiveTypes.Ref, id, val, isLocal, proto)
     }
@@ -176,7 +188,7 @@ export class Graph extends Node {
                 readonly id: number, 
                 readonly val: string, 
                 readonly isLocal: boolean,
-                public proto: string | undefined = undefined) {
+                public proto: Array<string> = []) {
 
         super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, isLocal, proto)
     }
@@ -215,6 +227,9 @@ export class GraphModel {
     constructor(
         public states: Array<State> = [], 
         public graphs: Array<Graph> = [],
+
+        public footprints: {'client'?: Graph, 'callee'?: Graph} = {},
+
         public graphNodes: Array<GraphNode> = [],
         public scalarNodes: Array<Node> = [],
 

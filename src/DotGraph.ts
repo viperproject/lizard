@@ -12,8 +12,18 @@ function ReachKey(state: State, graph_id: number, pred_id: number, succ_id: numb
 
 export class DotGraph {
 
+    private static GRAPH_BGCOLOR = '#dddddd'
+    private static CLIENT_BGCOLOR = '#ddddff'
+    private static CALLEE_BGCOLOR = '#ffdddd'
+    
+    private static REACH_COLOR = `#ffffff5f`
+    private static CLIENT_COLOR = `#0000ff5f`
+    private static CALLEE_COLOR = `#ff00005f`
+
     private __state_map = new Map<string, State>()
     private __graph_map = new Map<number, Graph>()
+    private __client: Graph | undefined
+    private __callee: Graph | undefined
     private __graph_node_map = new Map<number, GraphNode>()
     private __scalar_node_map = new Map<number, Node>()
     private __reach_map = new Map<ReachKey, LocalRelation>()
@@ -73,8 +83,8 @@ export class DotGraph {
         let nodesep = this.opts.rankdir_lr ? ` nodesep=0.5 ` : ` nodesep=0.5 `
         return `graph [outputorder="nodesfirst" label="" fontname="Helvetica" ${nodesep} ranksep=0.5 ${rankdir}];`
     }
-    private clusterPreamble(): string { 
-        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="#dddddd" margin=18];`
+    private clusterPreamble(bgcolor: string): string { 
+        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="${bgcolor}" margin=18];`
     }
     private nodePreamble(): string {
         return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=0.05];`
@@ -153,9 +163,34 @@ export class DotGraph {
 
     private renderGraph(graph: Graph): string {
         return `subgraph cluster_${graph.id} {\n` + 
-                `\t\t${this.clusterPreamble()}\n` + 
+                `\t\t${this.clusterPreamble(DotGraph.GRAPH_BGCOLOR)}\n` + 
                 `\t\tlabel="${graph.repr(true, true)} = ${this.renderNodeValue(graph)}";\n` + 
                 `\t${graph.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
+    }
+
+    private renderCalleeGraph(): string {
+        let callee = this.__callee!
+        return `subgraph cluster_${callee.id} {\n` + 
+               `\t\t${this.clusterPreamble(DotGraph.CALLEE_BGCOLOR)}\n` + 
+               `\t\tlabel="${callee.repr(true, true)} = ${this.renderNodeValue(callee)}";\n` + 
+               `\t${callee.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
+    }
+
+    private renderClientGraph(): string {
+        
+        let client = this.__client!
+        let callee = this.__callee!
+
+        let callee_str = this.renderCalleeGraph()
+
+        let callee_nodes = new Set(callee.nodes)
+        let frame_nodes = client.nodes.filter(node => !callee_nodes.has(node))
+
+        return `subgraph cluster_${client.id} {\n` + 
+                `\t\t${this.clusterPreamble(DotGraph.CLIENT_BGCOLOR)}\n` + 
+                `\t\tlabel="${client.repr(true, true)} = ${this.renderNodeValue(client)}";\n` + 
+                `\t${callee_str}\n` + 
+                `\t${frame_nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
     }
 
     private renderFieldRelation(field: Relation): string {
@@ -186,14 +221,26 @@ export class DotGraph {
         }
 
         let state = (this.__state_map.size > 1) ? `<SUB>${rel.state.name}</SUB>` : ``
-        let label = `<${rel.name}${state}>`
+        let graph_lbl 
+        let color 
+        if (graph === this.__client) {
+            graph_lbl = ``
+            color = DotGraph.CLIENT_COLOR
+        } else if (graph === this.__callee) {
+            graph_lbl = ``
+            color = DotGraph.CALLEE_COLOR
+        } else {
+            graph_lbl = (this.__graph_map.size > 1) ? `(${graph.repr(true, true)})` : ``
+            color = DotGraph.REACH_COLOR
+        }
+        let label = `<${rel.name}${state}${graph_lbl}>`
         let dashed = rel.name === 'P' ? `` : `style="dashed"`
         // let constrant = rel.name === 'P' ? `true` : `false`
         let constrant = rel.name === `true`
         if (is_mutual) {
-            return `N${pred.id} -> N${succ.id} [label=${label} color="#0000ff5f" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ];`
+            return `N${pred.id} -> N${succ.id} [label=${label} color="${color}" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ];`
         } else {
-            return `N${pred.id} -> N${succ.id} [label=${label} color="#0000ff5f" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ];`
+            return `N${pred.id} -> N${succ.id} [label=${label} color="${color}" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ];`
         }
     }
 
@@ -270,7 +317,23 @@ export class DotGraph {
         model.fields.forEach(field => fields_hash.add(field.name))
 
         // render the heap graph
-        let graphs = model.graphs.map(graph => this.renderGraph(graph)).join('\n\t')
+        // let graphs = model.graphs.map(graph => this.renderGraph(graph)).join('\n\t')
+        this.__client = model.footprints.client
+        this.__callee = model.footprints.callee
+        let footprint_ids = new Set<number>()
+        let graphs = ``
+        if (this.__client !== undefined && this.__callee !== undefined && this.__client !== this.__callee) {
+            graphs = this.renderClientGraph()
+            footprint_ids.add(this.__client.id)
+            footprint_ids.add(this.__callee.id)
+        } else if (this.__client !== undefined) {
+            graphs = this.renderGraph(this.__client)
+            footprint_ids.add(this.__client.id)
+        } else if (this.__callee !== undefined) {
+            graphs = this.renderGraph(this.__callee)
+            footprint_ids.add(this.__callee.id)
+        }
+
         let nodes_in_graphs = new Set(model.graphs.flatMap(graph => graph.nodes))
         let outer_nodes = model.graphNodes.filter(node => 
             !node.isNull && !nodes_in_graphs.has(node)).map(node => this.renderNode(node)).join('\n\t')
@@ -279,7 +342,15 @@ export class DotGraph {
                 this.renderFieldRelation(field)).join('\n\t')
             
         // Reachability-related stuff
-        let reach = this.renderReachRelations(model.reach)
+        let reach
+        if (footprint_ids.size > 0) {
+            // Footprints are defined ==> only footprint-local reachability should be rendered
+            reach = this.renderReachRelations(model.reach.filter(rel => footprint_ids.has(rel.graph_id)))
+        } else {
+            // No footprint information; render all available reachability relations
+            reach = this.renderReachRelations(model.reach)
+        }
+        
         
         // render the local store
         let local_refs = model.graphNodes.filter(n => n.isLocal)

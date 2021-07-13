@@ -1,6 +1,6 @@
 import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -56,14 +56,18 @@ export class Session {
     }
 
     private mkNode(name: string, innerval: string, is_local: boolean, 
-                   type: ViperType | undefined = undefined, proto: string | undefined = undefined): Node {
+                   type: ViperType | undefined = undefined, 
+                   proto: Array<string> | undefined = undefined): Node {
 
         // Special case the null node
         if (name === this.nullNodeName()) {
             this.null_node = new GraphNode([name], true, this.freshNodeId(), innerval, false, proto)
             return this.null_node!
         }
-        if (!type) {
+        if (proto === undefined) {
+            proto = new Array(this.innerToProto(name))
+        }
+        if (type === undefined) {
             // If type is not provided, try to retrieve it from available program definitions
             type = this.viperTypes!.get(name)
             if (!type) {
@@ -189,7 +193,7 @@ export class Session {
         // 0. Collect type information
         this.viperTypes = new ViperTypesProvider(this.programDefinitions!, 
             // e.g. "X@1" is an inner name for the prototype "X"
-            (innername: string) => this.innerToProto(this.isCarbon(), innername))  
+            (innername: string) => Session.innerToProto(this.isCarbon(), innername))  
 
         // 1. Collect program states 
         this.states = this.collectStates()
@@ -231,7 +235,6 @@ export class Session {
                     .concat(this.getDefinitionNames('Return'))
                     .concat(this.nullNodeName())
 
-        // Find atoms that define graph nodes
         let atoms = names.flatMap(proto => 
             this.atoms!.filter(atom => {
                 if (atom.aliases.length > 1) {
@@ -240,19 +243,20 @@ export class Session {
                 }
                 let atom_name = atom.aliases[0]
                 return this.isPrototypeOf(proto, atom_name)
-            }).map(atom => {
+            })
+            /*.map(atom => {
                 // Set the prototype variable for this atom
-                atom.proto = proto
-                return atom
-            }))
+                atom.proto = new Array(proto)
+                atom
+            })*/)
 
         // Check that all expected nodes are defined in each state
         if (atoms.length < names.length) {
-            Logger.warn(`could not find definitions for some graph nodes in raw model`)
+            Logger.warn(`could not find soem atom definitions in raw model`)
         }
 
         // Filter old versions of variables in case the encoding uses SSA
-        return this.extractLatestAssignedVars(atoms)
+        return atoms//this.extractLatestAssignedVars(atoms)
     }
 
     // map from inner values to nodes
@@ -335,9 +339,13 @@ export class Session {
         let field_relations = useful_fields.flatMap(fname => 
             nodes.flatMap(node => {
                 let state_to_rels = this.collectFieldValueInfo(node, fname)
-                let rels = this.states!.map(state => {
+                let rels = this.states!.flatMap(state => {
                     let adj_node = state_to_rels(state)
-                    return new Relation(fname, state, node.id, adj_node.id)
+                    if (adj_node === undefined) {
+                        return []
+                    } else {
+                        return [new Relation(fname, state, node.id, adj_node.id)]
+                    }
                 })
                 node.fields.push(...rels)
                 return rels
@@ -366,13 +374,15 @@ export class Session {
 
     private node_hash = new Map<number, Node>()
     private graphs = new Set<Graph>()
+    private latest_client_footprint: Graph | undefined = undefined
+    private latest_callee_footprint: Graph | undefined = undefined
     
     private graph_nodes = new Array<GraphNode>()
     private scalar_nodes = new Array<Node>()
     private fields = new Array<Relation>()
     private reach = new Array<LocalRelation>()
 
-    private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1): GraphModel {
+    private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1): void {
         Logger.info(`iteration №${iteration} of analyzing the heap model`)
         
         // A. Update hash s.t. nodes can be retrieved efficiently, via their IDs
@@ -387,13 +397,16 @@ export class Session {
         this.collectEquivClasses(starting_atoms, this.equiv_classes)
         let new_nonaliasing_nodes = this.mergeAliases(starting_atoms)
 
-        // C. Split nodes into Ref-typed and all others
+        // C. Group nodes by type: Ref, Set[Ref], Others
+        //    Keep only the latest version of client and callee footprints
         let new_graph_nodes = new Array<GraphNode>()
         new_nonaliasing_nodes.forEach(node => {
             if (node.type && isRef(node.type)) {
-                new_graph_nodes.push(<GraphNode> node)
+                let graph_node = <GraphNode> node
+                new_graph_nodes.push(graph_node)
             } else if (node.type && isSetOfRefs(node.type)) {
-                this.graphs.add(<Graph> node)
+                let graph = <Graph> node
+                this.graphs.add(graph)
             } else {
                 this.scalar_nodes.push(node)
             }
@@ -418,26 +431,75 @@ export class Session {
         } else {
             Logger.info(`🎩 saturation completed 🎩`)
         }
+    }
 
-        // H. Return model
-        this.graphModel = new GraphModel(this.states!, Array.from(this.graphs), this.graph_nodes, this.scalar_nodes, 
-                                         this.fields, this.reach, this.equiv_classes)
+    private extractFootprints(atoms: Array<Node>): void {
+        let client_footprint_max_index = -Infinity
+        let callee_footprints_max_index = -Infinity
+        atoms.filter(a => isSetOfRefs(a.type)).forEach(nodeset => {
+            let graph = <Graph> nodeset
+            let {proto, suffix, index} = Session.innerNameParser(graph.aliases[0])
 
-        return this.graphModel!
+            if (proto === 'G') {
+                if (index === undefined) {
+                    // choose the entry without index over all possible other entries
+                    // e.g. "G" rather than "G@1"
+                    client_footprint_max_index = +Infinity 
+                    this.latest_client_footprint = graph
+
+                } else if (client_footprint_max_index < index) {
+                    // choose the entry with the highest index
+                    // e.g. "G@1" rather than "G@0"
+                    client_footprint_max_index = index
+                    this.latest_client_footprint = graph
+                }
+            } else if (proto === 'H') {
+                if (index === undefined) {
+                    // choose the entry without index over all possible other entries
+                    // e.g. "H" rather than "H@1"
+                    callee_footprints_max_index = +Infinity
+                    this.latest_callee_footprint = graph
+
+                } else if (callee_footprints_max_index < index) {
+                    // choose the entry with the highest index
+                    // e.g. "H@1" rather than "H@0"
+                    callee_footprints_max_index = index 
+                    this.latest_callee_footprint = graph
+                }
+            }
+        })
     }
 
     public produceGraphModel(): GraphModel {
-        // O. Collect initial nodes
+        // 0. Collect initial nodes
         let starting_atoms = this.collectInitialGraphsAndNodes()
 
-        // I. Process and Saturate! 
-        let gm = this.produceGraphModelRec(starting_atoms)
+        // 1. Extract latest footprints
+        this.extractFootprints(starting_atoms)
+        
+        // 2. Process and Saturate! 
+        this.produceGraphModelRec(starting_atoms)
 
-        // J. Collect reachability information
-        let non_null_nodes = gm.graphNodes.filter(n => !n.isNull)
-        let reach = this.collectReach(non_null_nodes)
-        gm.reach = reach
-        return gm
+        // 3. Collect reachability information
+        let non_null_nodes = this.graph_nodes.filter(n => !n.isNull)
+        this.reach = this.collectReach(non_null_nodes)
+
+        // 5. Complete model
+        this.graphModel = 
+            new GraphModel(
+                this.states!, 
+                Array.from(this.graphs), 
+                {
+                    'client': this.latest_client_footprint, 
+                    'callee': this.latest_callee_footprint
+                },
+                this.graph_nodes, 
+                this.scalar_nodes, 
+                this.fields, 
+                this.reach, 
+                this.equiv_classes)
+
+        return this.graphModel
     }
 
     public applyQuery(query: Query): GraphModel {
@@ -550,7 +612,7 @@ export class Session {
         }
     }
 
-    private collectFieldValueInfo(node: Node, fname: string): (state: State) => Node {
+    private collectFieldValueInfo(node: Node, fname: string): (state: State) => Node | undefined {
         let rel_name = this.fieldLookupRelationName(fname)
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
         if (!rel_maybe) {
@@ -565,6 +627,17 @@ export class Session {
         return (state: State) => {
             let succ_innerval = simple_fun(state.val)
             let field_type = this.viperTypes!.get(fname)
+
+            // Check the value type. If the type in the model contradicts the field type, 
+            //  assume that this value is irrelevant for the counterexample. 
+            if (!isBool(field_type) && this.isBoolLiteral(succ_innerval) || 
+                !isInt(field_type) && this.isIntLiteral(succ_innerval) || 
+                !isPerm(field_type) && this.isFloatLiteral(succ_innerval)) {
+
+                Logger.info(`ignoring field value ${succ_innerval} which is of inconsistent type in the model`)
+                return undefined
+            }
+            
             let key = EquivClasses.key(succ_innerval, field_type)
             let succ: Node
             if (this.nonAliasingNodesMap.has(key)) {
@@ -572,7 +645,7 @@ export class Session {
                 succ = this.nonAliasingNodesMap.get(key)!
             } else {
                 // this is a fresh value; create a new atom (per alias) to support it
-                Logger.info(`no atom found for value ${succ_innerval} of type ${field_type}; ` + 
+                Logger.info(`no atom found for value ${succ_innerval} of type ${field_type.typename}; ` + 
                             `adding transitive node(s): `)
                 let aliasing_succs = node.aliases.map(pred_alias_name => {
                     // All aliases of [[node]] yield new aliasing fresh nodes. 
@@ -590,6 +663,22 @@ export class Session {
             }
             return succ
         }
+    }
+
+    private isIntLiteral(succ_innerval: string): boolean {
+        let i = parseInt(succ_innerval) 
+        let f = parseFloat(succ_innerval)
+        return i === i && f === f && i !== f
+    }
+
+    private isFloatLiteral(succ_innerval: string): boolean {
+        let i = parseInt(succ_innerval) 
+        let f = parseFloat(succ_innerval)
+        return i === i && f === f && i !== f
+    }
+
+    private isBoolLiteral(succ_innerval: string): boolean {
+        return succ_innerval === 'true' || succ_innerval === 'false'
     }
 
 
@@ -879,14 +968,14 @@ export class Session {
     }
 
     private static innerNameParser(inner_name: string): 
-        { proto: string, suffix?: number, index?: number } {
+        { proto: string, suffix?: string, index?: number } {
 
-        let m2 = inner_name.match(/(.*)@(\d+)@(\d+)/)
-        if (m2 && m2[1] && m2[2] && m2[3]) {
-            return { proto: m2[1], suffix: parseInt(m2[2]), index: parseInt(m2[3]) }
+        let m2 = inner_name.match(/(.*)@(.*)@(\d+)/)
+        if (m2 !== null) {
+            return { proto: m2[1], suffix: m2[2], index: parseInt(m2[3]) }
         }
         let m1 = inner_name.match(/(.*)@(\d+)/)
-        if (m1 && m1[1] && m1[2]) {
+        if (m1 !== null) {
             return { proto: m1[1], index: parseInt(m1[2]) }
         }
         return { proto: inner_name }
@@ -902,12 +991,16 @@ export class Session {
         return inner_name_struct.proto
     }
     
-    private innerToProto(is_carbon: boolean, inner_name: string): string {
+    private static innerToProto(is_carbon: boolean, inner_name: string): string {
         if (is_carbon) {
             return Session.carbonInnerNameToProto(inner_name)
         } else {
             return Session.siliconInnerToProto(inner_name)
         }
+    }
+
+    private innerToProto(inner_name: string): string {
+        return Session.innerToProto(this.isCarbon(), inner_name)
     }
 
     /* We are interested in verifying the failed assertion --- 
