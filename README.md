@@ -24,5 +24,46 @@ To compile the project:
 # Dependencies
 To use Lizard, you first need to install the Viper extension for your Visual Studio Code installation. Viper is a JVM server application, so you'll also need Java. For more details, see [Download and Install Viper](http://viper.ethz.ch/downloads/).
 
+To activate the verification debugger, your preferred Viper backend must be set up to emit counterexamples. This can be doen by passing the ```--counterexample native``` option. For example, the JSON settings below configure two Viper backends ("silicon-debug" and "carbon-debug") to produce counterexamples (to switch between backends, use ```Ctrl+L``` or ```⌘+L```): 
+```json
+"viperSettings.verificationBackends": [
+  {
+    "v": "674a514867b1",
+    "name": "silicon-debug",
+    "type": "silicon",
+    "paths": [],
+    "engine": "ViperServer",
+    "timeout": 100000,
+    "stages": [
+      {
+        "name": "verify",
+        "isVerification": true,
+        "mainMethod": "viper.silicon.SiliconRunner",
+        "customArguments": "--z3Exe $z3Exe$ --disableCaching --counterexample native $fileToVerify$"
+      }
+    ],
+    "stoppingTimeout": 5000
+  },
+  {
+    "v": "674a514867b1",
+    "name": "carbon-debug",
+    "type": "carbon",
+    "paths": [],
+    "engine": "ViperServer",
+    "timeout": 100000,
+    "stages": [
+      {
+        "name": "verify",
+        "isVerification": true,
+        "mainMethod": "viper.carbon.Carbon",
+        "customArguments": "--z3Exe $z3Exe$ --boogieExe $boogieExe$ --disableCaching --counterexample native $fileToVerify$"
+      }
+    ],
+    "stoppingTimeout": 5000
+  }
+]
+```
+
+
 # Historical note
 This extension is a follow-up project to the family of verification debugger prototypes developed as student projects at the Programming Methodology Group at ETH Zurich. In particular, some code is borrowed from Alessio Aurrechia's Master thesis project (which used symbolic execution traces and Alloy models, as opposed to Z3 models, to extract possible counterexamples). 
