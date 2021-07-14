@@ -204,6 +204,10 @@ export class Relation {
     
         this._ = `${name}[ ${state.name} ](N${pred_id}, N${succ_id})`
     }
+
+    public hash(): string {
+        return this._
+    }
 }
 
 export class LocalRelation extends Relation {

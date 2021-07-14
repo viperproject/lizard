@@ -1,6 +1,6 @@
 import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -470,6 +470,178 @@ export class Session {
         })
     }
 
+    private static transitiveClosure(state: State, rels: Array<Relation>): Set<Relation> {
+        // Make sure we keep one copy of each relation
+        let closure = new Map<string, Relation>()
+        rels.forEach(rel => {
+            let root_tc_rel = new Relation('TC', rel.state, rel.pred_id, rel.succ_id)
+            closure.set(root_tc_rel.hash(), root_tc_rel)
+        })
+
+        while (true) {
+            let new_rels = new Map<string, Relation>()
+            closure.forEach(rel_a => {
+                closure.forEach(rel_b => {
+                    if (rel_a.succ_id === rel_b.pred_id) {
+                        let trans_rel = new Relation('TC', state, rel_a.pred_id, rel_b.succ_id)
+                        new_rels.set(trans_rel.hash(), trans_rel)
+                    }
+                })
+            })
+            let found_new_elems = false
+            new_rels.forEach((rel, rhash) => {
+                if (!closure.has(rhash)) {
+                    found_new_elems = true
+                    closure.set(rhash, rel)
+                }
+            })
+            if (!found_new_elems) {
+                break
+            }
+        }
+        return new Set(closure.values())
+    }
+
+    private static computeTransitiveClosure(heap_edges: Array<Relation>): Map<State, Map<string, Relation>> {
+        let tc = new Map<State, Map<string, Relation>>()
+        
+        // Hash heap edges by state
+        let heap_edges_in_state = new Map<State, Array<Relation>>()
+        heap_edges.forEach(edge => {
+            let entry = heap_edges_in_state.get(edge.state)
+            if (entry === undefined) {
+                heap_edges_in_state.set(edge.state, new Array(edge))
+            } else {
+                entry.push(edge)
+            }
+        })
+
+        // Process each state
+        let states = new Set(heap_edges_in_state.keys())
+        states.forEach(state => {
+            let tc_for_state = Session.transitiveClosure(state, heap_edges_in_state.get(state)!)
+            let rel_map = new Map<string, Relation>()
+            tc_for_state.forEach(rel => rel_map.set(rel.hash(), rel))
+            tc.set(state, rel_map)
+        })
+
+        return tc
+    }
+
+    private filterReachabilityRelations(raw_reach_rels: Array<LocalRelation>): Array<LocalRelation> {
+
+        // 0. Remove spurious relations, 
+        // e.g. $P(A, x, y)$ where $x \notin A$
+        raw_reach_rels = raw_reach_rels.filter(rel => {
+            let graph = <Graph> this.node_hash.get(rel.graph_id)!
+            let pred = <GraphNode> this.node_hash.get(rel.pred_id)!
+            return graph.nodes.includes(pred)
+        })
+
+        // 1. Compute transitive closure based on Ref-fields 
+        let tc = Session.computeTransitiveClosure(this.fields.filter(field => {
+            let succ = this.node_hash.get(field.succ_id)
+            return succ !== undefined && isRef(succ.type) && !isNull(succ)
+        }))
+
+        // 2. Remove reach relations contradicting field information, 
+        // e.g. x.next == null && y != x ==> !P(A, x, y)
+        raw_reach_rels = raw_reach_rels.filter(rel => {
+            let entry = tc.get(rel.state)
+            if (entry === undefined) {
+                // In case there are no transitive heap relations for this state, keep reachability information from the model
+                return true
+            } else {
+                let key = (new Relation('TC', rel.state, rel.pred_id, rel.succ_id)).hash()
+                let tc_rel = entry.get(key)
+                if (!tc_rel) {
+                    // In case there is no transitive heap relation for this pred and succ, keep reachability information from the model
+                    return true
+                } else {
+                    if (rel.name === 'P') {
+                        // The reachability infromation from the model is redundant (it follows concrete heap edges)
+                        // removing this relation...
+                        return false
+                    } else if (rel.name === '¬P') {
+                        // The reachability information from the model contradicts the computed transitive closure
+                        // removing this relation...
+                        return false
+                    } else {
+                        // this should never happen
+                        Logger.error(`unexpected relation name: ${rel.name} (expected 'P' or '¬P')`)
+                        return false
+                    }
+                }
+            }
+        })
+
+        // 3. Remove redundant relations
+        let client_pos_reach = new Map<string, LocalRelation>()
+        let callee_pos_reach = new Map<string, LocalRelation>()
+        let client_neg_reach = new Map<string, LocalRelation>()
+        let callee_neg_reach = new Map<string, LocalRelation>()
+
+        function relkey(rel: LocalRelation): string {
+            // encodes all but the name and graph_id
+            return `${rel.state.val}_${rel.pred_id}_${rel.succ_id}`
+        }
+            
+        raw_reach_rels.forEach(rel => {
+            let key = relkey(rel)
+            let graph = this.node_hash.get(rel.graph_id)
+            if (graph === this.latest_client_footprint) {
+                if (rel.name === 'P') {
+                    client_pos_reach.set(key, rel)
+                } else if (rel.name === '¬P') {
+                    client_neg_reach.set(key, rel)
+                } else {
+                    Logger.error(`unexpected relation name: ${rel.name} (expected 'P' or '¬P')`)
+                }
+            } else if (graph === this.latest_callee_footprint) {
+                if (rel.name === 'P') {
+                    callee_pos_reach.set(key, rel)
+                } else if (rel.name === '¬P') {
+                    callee_neg_reach.set(key, rel)
+                } else {
+                    Logger.error(`unexpected relation name: ${rel.name} (expected 'P' or '¬P')`)
+                }
+            }
+        })
+
+        if (client_pos_reach.size === 0 && callee_pos_reach.size === 0 && 
+            client_neg_reach.size === 0 && callee_neg_reach.size === 0) {
+            // Do not filter the relations since the footprints are not defined
+            return raw_reach_rels
+        } else {
+            // Filter redundant relations
+            let result = new Set<LocalRelation>()
+
+            // (1) P(H) ==> P(G)
+            // Throw away P(G,x,y) for which there exist P(H,x,y)
+            client_pos_reach.forEach(client_pos_rel => {
+                let key = relkey(client_pos_rel)
+                if (!callee_pos_reach.has(key)) {
+                    result.add(client_pos_rel)
+                }
+            })
+
+            // (2) !P(G) ==> !P(H)
+            // Throw away !P(H,x,y) for which there exists !P(G,x,y)
+            callee_neg_reach.forEach(callee_neg_rel => {
+                let key = relkey(callee_neg_rel)
+                if (!client_neg_reach.has(key)) {
+                    result.add(callee_neg_rel)
+                }
+            })
+
+            // (3) strong reachability: P(H), !P(G)
+            callee_pos_reach.forEach(callee_pos_rel => result.add(callee_pos_rel))
+            client_neg_reach.forEach(client_neg_rel => result.add(client_neg_rel))
+            
+            return Array.from(result)
+        }
+    }
+
     public produceGraphModel(): GraphModel {
         // 0. Collect initial nodes
         let starting_atoms = this.collectInitialGraphsAndNodes()
@@ -482,7 +654,10 @@ export class Session {
 
         // 3. Collect reachability information
         let non_null_nodes = this.graph_nodes.filter(n => !n.isNull)
-        this.reach = this.collectReach(non_null_nodes)
+        let raw_reach_rels = this.collectReach(non_null_nodes)
+        
+        // 4. Filter out redundant information
+        this.reach = this.filterReachabilityRelations(raw_reach_rels)
 
         // 5. Complete model
         this.graphModel = 
