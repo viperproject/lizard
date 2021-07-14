@@ -14,11 +14,11 @@ export class DotGraph {
 
     private static GRAPH_BGCOLOR = '#dddddd'
     private static CLIENT_BGCOLOR = '#ddddff'
-    private static CALLEE_BGCOLOR = '#ffdddd'
-    
-    private static REACH_COLOR = `#ffffff5f`
+    private static CALLEE_BGCOLOR = '#FFE883'
+
+    private static REACH_COLOR = `#3333335f`
     private static CLIENT_COLOR = `#0000ff5f`
-    private static CALLEE_COLOR = `#ff00005f`
+    private static CALLEE_COLOR = `#E445005f`
 
     private __state_map = new Map<string, State>()
     private __graph_map = new Map<number, Graph>()
@@ -83,8 +83,8 @@ export class DotGraph {
         let nodesep = this.opts.rankdir_lr ? ` nodesep=0.5 ` : ` nodesep=0.5 `
         return `graph [outputorder="nodesfirst" label="" fontname="Helvetica" ${nodesep} ranksep=0.5 ${rankdir}];`
     }
-    private clusterPreamble(bgcolor: string): string { 
-        return `graph [labelloc="t" style="rounded" fontname="Helvetica" bgcolor="${bgcolor}" margin=18];`
+    private clusterPreamble(color: string, bgcolor: string): string { 
+        return `graph [labelloc="t" style="rounded" fontname="Helvetica" color="${color}" bgcolor="${bgcolor}" margin=18];`
     }
     private nodePreamble(): string {
         return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=0.05];`
@@ -163,7 +163,7 @@ export class DotGraph {
 
     private renderGraph(graph: Graph): string {
         return `subgraph cluster_${graph.id} {\n` + 
-                `\t\t${this.clusterPreamble(DotGraph.GRAPH_BGCOLOR)}\n` + 
+                `\t\t${this.clusterPreamble(DotGraph.REACH_COLOR, DotGraph.GRAPH_BGCOLOR)}\n` + 
                 `\t\tlabel="${graph.repr(true, true)} = ${this.renderNodeValue(graph)}";\n` + 
                 `\t${graph.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
     }
@@ -171,7 +171,7 @@ export class DotGraph {
     private renderCalleeGraph(): string {
         let callee = this.__callee!
         return `subgraph cluster_${callee.id} {\n` + 
-               `\t\t${this.clusterPreamble(DotGraph.CALLEE_BGCOLOR)}\n` + 
+               `\t\t${this.clusterPreamble(DotGraph.CALLEE_COLOR, DotGraph.CALLEE_BGCOLOR)}\n` + 
                `\t\tlabel="${callee.repr(true, true)} = ${this.renderNodeValue(callee)}";\n` + 
                `\t${callee.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
     }
@@ -187,7 +187,7 @@ export class DotGraph {
         let frame_nodes = client.nodes.filter(node => !callee_nodes.has(node))
 
         return `subgraph cluster_${client.id} {\n` + 
-                `\t\t${this.clusterPreamble(DotGraph.CLIENT_BGCOLOR)}\n` + 
+                `\t\t${this.clusterPreamble(DotGraph.CLIENT_COLOR, DotGraph.CLIENT_BGCOLOR)}\n` + 
                 `\t\tlabel="${client.repr(true, true)} = ${this.renderNodeValue(client)}";\n` + 
                 `\t${callee_str}\n` + 
                 `\t${frame_nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
@@ -233,7 +233,7 @@ export class DotGraph {
             graph_lbl = (this.__graph_map.size > 1) ? `(${graph.repr(true, true)})` : ``
             color = DotGraph.REACH_COLOR
         }
-        let label = `<${rel.name}${state}${graph_lbl}>`
+        let label = `<<FONT COLOR="${color}">${rel.name}${state}${graph_lbl}</FONT>>`
         let dashed = rel.name === 'P' ? `` : `style="dashed"`
         // let constrant = rel.name === 'P' ? `true` : `false`
         let constrant = rel.name === `true`
