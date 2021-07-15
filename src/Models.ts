@@ -1,4 +1,13 @@
-import { serialize } from "v8"
+// Used to indicate that a partial model does not specify a value for some cases in a function interpretation. 
+export type SmtBool = 'unspecified' | 'true' | 'false'
+
+export function castToSmtBool(val: string): SmtBool {
+    if (['unspecified', 'true', 'false'].includes(val)) {
+        return <SmtBool> val
+    } else {
+        throw `cannot cast ${val} to SmtBool`
+    }
+}
 
 export interface ModelEntry {
     type: string
@@ -245,6 +254,10 @@ export class Relation {
     }
 
     public hash(): string {
+        return this._
+    }
+
+    public repr(full_details: boolean = false): string {
         return this._
     }
 }

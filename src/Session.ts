@@ -1,6 +1,6 @@
 import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -315,9 +315,11 @@ export class Session {
                         let state_to_rels = this.collectReachInfo(rel_name, graph, pred_node, succ_node)
                         let rels = this.states!.map(state => {
                             let [is_reachable, status] = state_to_rels(state)
-                            let r = is_reachable ? 'P' : '¬P'
-                            let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id, status)
-                            reach_rels.add(new_rel)
+                            if (is_reachable !== 'unspecified') {
+                                let r = (is_reachable === 'true') ? 'P' : '¬P'
+                                let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id, status)
+                                reach_rels.add(new_rel)
+                            }
                         })
                         return rels
                     }))))
@@ -364,7 +366,7 @@ export class Session {
         graphs.forEach(graph => {
             nodes.forEach(node => {
                 let [val, status] = this.applySetInMapEntry(rel!, graph, node)
-                if (this.isInnerValueTrue(val)) {
+                if (this.isInnerValueTrue(val) === 'true') {
                     // this node belongs to this graph
                     graph.addNode(node, status)
                 }
@@ -552,27 +554,43 @@ export class Session {
 
         return tc
     }
+    
+    private log_reason(rel: Relation, reason: string): void {
+        let pred = this.node_hash.get(rel.pred_id)!
+        let succ = this.node_hash.get(rel.succ_id)!
+        let rel_str = `${rel.name}[ ${rel.state.val} ](${pred.val}, ${succ.val})`
+        Logger.info(`removing relation ${rel.repr()} = ${rel_str} because ${reason}`)
+    }
+
+    private filter_rel(rel: Relation, is_good: boolean, reason_removed: string): boolean {
+        if (!is_good) {
+            this.log_reason(rel, reason_removed)
+            return false
+        } else {
+            return true
+        }
+    }
 
     private filterReachabilityRelations(raw_reach_rels: Array<LocalRelation>): Array<LocalRelation> {
 
-        // -1. Remove relations that originate from default model cases
-        raw_reach_rels = raw_reach_rels.filter(rel => rel.status !== 'default')
+        // 0. Remove relations that originate from default model cases
+        raw_reach_rels = raw_reach_rels.filter(rel => this.filter_rel(rel, rel.status !== 'default', `it originates from one of the default model cases`))
 
-        // 0. Remove spurious relations, 
+        // 1. Remove spurious relations, 
         // e.g. $P(A, x, y)$ where $x \notin A$
         raw_reach_rels = raw_reach_rels.filter(rel => {
             let graph = <Graph> this.node_hash.get(rel.graph_id)!
             let pred = <GraphNode> this.node_hash.get(rel.pred_id)!
-            return graph.hasNode(pred)
+            return this.filter_rel(rel, graph.hasNode(pred), `local relation must originate in it's local graph`)
         })
 
-        // 1. Compute transitive closure based on Ref-fields 
+        // 2-I Compute transitive closure based on Ref-fields 
         let tc = Session.computeTransitiveClosure(this.fields.filter(field => {
             let succ = this.node_hash.get(field.succ_id)
             return succ !== undefined && isRef(succ.type) && !isNull(succ)
         }))
 
-        // 2. Remove reachability relations contradicting field information, 
+        // 2-II Remove reachability relations contradicting field information, 
         // e.g. x.next == null && y != x ==> !P(A, x, y)
         raw_reach_rels = raw_reach_rels.filter(rel => {
             let entry = tc.get(rel.state)
@@ -586,19 +604,9 @@ export class Session {
                     // In case there is no transitive heap relation for this pred and succ, keep reachability information from the model
                     return true
                 } else {
-                    if (rel.name === 'P') {
-                        // The reachability infromation from the model is redundant (it follows concrete heap edges)
-                        // removing this relation...
-                        return false
-                    } else if (rel.name === '¬P') {
-                        // The reachability information from the model contradicts the computed transitive closure
-                        // removing this relation...
-                        return false
-                    } else {
-                        // this should never happen
-                        Logger.error(`unexpected relation name: ${rel.name} (expected 'P' or '¬P')`)
-                        return false
-                    }
+                    return this.filter_rel(rel, ['P', '¬P'].includes(rel.name), `expected reachability relation but found a '${rel.name}' relation`)
+                           && this.filter_rel(rel, rel.name !== 'P', `this reachability relation is redundant (it merely follows concrete heap edges)`)
+                           && this.filter_rel(rel, rel.name === '¬P', `this reachability relation contradicts the computed transitive closure`)
                 }
             }
         })
@@ -650,6 +658,9 @@ export class Session {
                 let key = relkey(client_pos_rel)
                 if (!callee_pos_reach.has(key)) {
                     result.add(client_pos_rel)
+                } else {
+                    this.log_reason(client_pos_rel, 
+                        `H ⊆ G ^ P(H) ⇒ P(G), i.e. positive client-local reachability relation follows from an known positive callee-local reachability relation`)
                 }
             })
 
@@ -659,10 +670,13 @@ export class Session {
                 let key = relkey(callee_neg_rel)
                 if (!client_neg_reach.has(key)) {
                     result.add(callee_neg_rel)
+                } else {
+                    this.log_reason(callee_neg_rel, 
+                        `H ⊆ G ^ ¬P(G) ⇒ ¬P(H), i.e. negative callee-local reachability relation follows from an known negative client-local reachability relation`)
                 }
             })
 
-            // (3) strong reachability: P(H), !P(G)
+            // (3) keep remaining strong reachability information: P(H), !P(G)
             callee_pos_reach.forEach(callee_pos_rel => result.add(callee_pos_rel))
             client_neg_reach.forEach(client_neg_rel => result.add(client_neg_rel))
             
@@ -773,7 +787,7 @@ export class Session {
     }
 
     private collectReachInfo(rel_name: string, graph: Graph, 
-                             pred_node: GraphNode, succ_node: GraphNode): (state: State) => [boolean, Status] {
+                             pred_node: GraphNode, succ_node: GraphNode): (state: State) => [SmtBool, Status] {
 
         /** Step 1 -- decode the reachability function that depends on an edge graph */
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
@@ -802,16 +816,8 @@ export class Session {
 
         /** Step 3 -- combine the decoded functions */
         return (state: State) => {
-            let [edge_graph, inner_status] = inner_fun(state.val)
-            let [predicate_val, outer_status] = outer_fun(edge_graph)
-            if (predicate_val !== 'true' && predicate_val !== 'false') {
-                throw `got unexpected value for a reachability predicate: ${predicate_val}`
-            }
-            if (predicate_val === 'true') {
-                return [true, outer_status]  // keep only outer function's status
-            } else {
-                return [false, outer_status] // keep only outer function's status
-            }
+            let [edge_graph, _] = inner_fun(state.val)
+            return outer_fun(edge_graph)
         }
     }
 
@@ -838,7 +844,12 @@ export class Session {
                 !isInt(field_type) && this.isIntLiteral(succ_innerval) || 
                 !isPerm(field_type) && this.isFloatLiteral(succ_innerval)) {
 
-                Logger.info(`ignoring field value ${succ_innerval} which is of inconsistent type in the model`)
+                Logger.info(`ignoring field value ${succ_innerval} of node of node ${node.repr()} (inconsistent field type in the model)`)
+                return [undefined, status]
+            }
+
+            if (succ_innerval === '#unspecified') {
+                Logger.info(`ignoring unspecified value of field ${fname} of node ${node.repr(true)}`)
                 return [undefined, status]
             }
             
@@ -1012,7 +1023,7 @@ export class Session {
         }).map(pair => new State(pair[0], (<ConstantEntry> pair[1]).value))
     }
 
-    private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => [string, Status] {
+    private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => [SmtBool, Status] {
         let res_map = new Map<string, string>()
 
         m_entry.cases.forEach(map_case => {
@@ -1037,9 +1048,9 @@ export class Session {
 
         return (edge_graph: string) => {
             if (res_map.has(edge_graph)) {
-                return [res_map.get(edge_graph)!, 'from_cases']
+                return [castToSmtBool(res_map.get(edge_graph)!), 'from_cases']
             } else {
-                return [default_val, 'default']
+                return [castToSmtBool(default_val), 'default']
             }
         }
     }
@@ -1087,7 +1098,7 @@ export class Session {
                 if (first === reciever) {
                     let val = getConstantEntryValue(map_case.value)
                     res_map.set(state, val)
-                }   
+                }
             }
         })
 
@@ -1138,12 +1149,12 @@ export class Session {
         }
     }
 
-    private isInnerValueTrue(innerval: string): boolean {
+    private isInnerValueTrue(innerval: string): SmtBool {
         if (innerval === 'true') {
-            return true
+            return 'true'
         }
         if (innerval === 'false') {
-            return false
+            return 'false'
         }
         if (this.isCarbon()) {
             let U_2_bool = this.getEntryByName('U_2_bool')
@@ -1151,15 +1162,21 @@ export class Session {
                 throw `cannot interpret value '${innerval}' of uninterpreted type to Boolean: model does not define 'U_2_bool'`
             }
             let [bool_str, _] = Session.appleEntry(U_2_bool, [innerval])
+            if (bool_str === '#unspecified') {
+                return 'unspecified'
+            }
             if (bool_str !== 'true' && bool_str !== 'false') {
                 throw `cannot interpret value '${bool_str}' as Boolean`
             }
-            return bool_str === 'true'
+            return bool_str
         } else {
+            if (innerval === '#unspecified') {
+                return 'unspecified'
+            }
             if (innerval !== 'true' && innerval !== 'false') {
                 throw `cannot interpret value '${innerval}' as Boolean`
             }
-            return innerval === 'true'
+            return innerval
         }
     }
 
