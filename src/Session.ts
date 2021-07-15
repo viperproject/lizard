@@ -1,6 +1,6 @@
 import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -77,7 +77,7 @@ export class Session {
             }
         }
         if (type.typename === 'Set[Ref]') {
-            return new Graph([], [name], this.freshNodeId(), innerval, is_local, proto)
+            return new Graph([name], this.freshNodeId(), innerval, is_local, proto)
         } else if (type && type.typename === 'Ref') {
             return new GraphNode([name], false, this.freshNodeId(), innerval, is_local, proto)
         } else {
@@ -252,7 +252,7 @@ export class Session {
 
         // Check that all expected nodes are defined in each state
         if (atoms.length < names.length) {
-            Logger.warn(`could not find soem atom definitions in raw model`)
+            Logger.warn(`could not find some atom definitions in raw model`)
         }
 
         // Filter old versions of variables in case the encoding uses SSA
@@ -314,9 +314,9 @@ export class Session {
                     nodes.forEach(succ_node => {
                         let state_to_rels = this.collectReachInfo(rel_name, graph, pred_node, succ_node)
                         let rels = this.states!.map(state => {
-                            let is_reachable = state_to_rels(state)
+                            let [is_reachable, status] = state_to_rels(state)
                             let r = is_reachable ? 'P' : '¬P'
-                            let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id)
+                            let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id, status)
                             reach_rels.add(new_rel)
                         })
                         return rels
@@ -340,11 +340,11 @@ export class Session {
             nodes.flatMap(node => {
                 let state_to_rels = this.collectFieldValueInfo(node, fname)
                 let rels = this.states!.flatMap(state => {
-                    let adj_node = state_to_rels(state)
+                    let [adj_node, status] = state_to_rels(state)
                     if (adj_node === undefined) {
                         return []
                     } else {
-                        return [new Relation(fname, state, node.id, adj_node.id)]
+                        return [new Relation(fname, state, node.id, adj_node.id, status)]
                     }
                 })
                 node.fields.push(...rels)
@@ -363,10 +363,10 @@ export class Session {
         }
         graphs.forEach(graph => {
             nodes.forEach(node => {
-                let val = this.applySetInMapEntry(rel!, graph, node)
+                let [val, status] = this.applySetInMapEntry(rel!, graph, node)
                 if (this.isInnerValueTrue(val)) {
                     // this node belongs to this graph
-                    graph.nodes.push(node)
+                    graph.addNode(node, status)
                 }
             })
         })
@@ -436,34 +436,59 @@ export class Session {
     private extractFootprints(atoms: Array<Node>): void {
         let client_footprint_max_index = -Infinity
         let callee_footprints_max_index = -Infinity
-        atoms.filter(a => isSetOfRefs(a.type)).forEach(nodeset => {
+        this.graphs.forEach(nodeset => {
             let graph = <Graph> nodeset
-            let {proto, suffix, index} = Session.innerNameParser(graph.aliases[0])
+            let is_client_footprint_proto = false
+            let is_callee_footprint_proto = false
+            let highest_client_footprint_index: number = -Infinity
+            let highest_callee_footprint_index: number = -Infinity
 
-            if (proto === 'G') {
-                if (index === undefined) {
+            graph.aliases.forEach(alias => {
+                // Handle the case in which there are several aliasing node sets 
+                //  that potentially represent the footprints
+                let {proto, suffix, index} = Session.innerNameParser(graph.aliases[0])
+                if (proto === 'G') {
+                    is_client_footprint_proto = true
+                    if (index === undefined) {
+                        highest_client_footprint_index = +Infinity
+                    } else if (highest_client_footprint_index < index) {
+                        highest_client_footprint_index = index
+                    }
+                } else if (proto === 'H') {
+                    is_callee_footprint_proto = true
+                    if (index === undefined) {
+                        highest_callee_footprint_index = +Infinity
+                    } else if (highest_callee_footprint_index < index) {
+                        highest_callee_footprint_index = index
+                    }
+                }
+            })
+            // Maximize the index among all node sets whose proto is a footprint 
+            //  (no index is better than all indices)
+            if (is_client_footprint_proto) {
+                if (highest_client_footprint_index === undefined && highest_client_footprint_index === +Infinity) {
                     // choose the entry without index over all possible other entries
                     // e.g. "G" rather than "G@1"
                     client_footprint_max_index = +Infinity 
                     this.latest_client_footprint = graph
 
-                } else if (client_footprint_max_index < index) {
+                } else if (client_footprint_max_index < highest_client_footprint_index) {
                     // choose the entry with the highest index
                     // e.g. "G@1" rather than "G@0"
-                    client_footprint_max_index = index
+                    client_footprint_max_index = highest_client_footprint_index
                     this.latest_client_footprint = graph
                 }
-            } else if (proto === 'H') {
-                if (index === undefined) {
+            } else if (is_callee_footprint_proto) {
+                if (highest_callee_footprint_index === undefined && highest_callee_footprint_index === +Infinity) {
                     // choose the entry without index over all possible other entries
                     // e.g. "H" rather than "H@1"
                     callee_footprints_max_index = +Infinity
                     this.latest_callee_footprint = graph
 
-                } else if (callee_footprints_max_index < index) {
+                } else if (callee_footprints_max_index < highest_callee_footprint_index) {
                     // choose the entry with the highest index
                     // e.g. "H@1" rather than "H@0"
-                    callee_footprints_max_index = index 
+                    callee_footprints_max_index = highest_callee_footprint_index 
                     this.latest_callee_footprint = graph
                 }
             }
@@ -530,12 +555,15 @@ export class Session {
 
     private filterReachabilityRelations(raw_reach_rels: Array<LocalRelation>): Array<LocalRelation> {
 
+        // -1. Remove relations that originate from default model cases
+        raw_reach_rels = raw_reach_rels.filter(rel => rel.status !== 'default')
+
         // 0. Remove spurious relations, 
         // e.g. $P(A, x, y)$ where $x \notin A$
         raw_reach_rels = raw_reach_rels.filter(rel => {
             let graph = <Graph> this.node_hash.get(rel.graph_id)!
             let pred = <GraphNode> this.node_hash.get(rel.pred_id)!
-            return graph.nodes.includes(pred)
+            return graph.hasNode(pred)
         })
 
         // 1. Compute transitive closure based on Ref-fields 
@@ -544,7 +572,7 @@ export class Session {
             return succ !== undefined && isRef(succ.type) && !isNull(succ)
         }))
 
-        // 2. Remove reach relations contradicting field information, 
+        // 2. Remove reachability relations contradicting field information, 
         // e.g. x.next == null && y != x ==> !P(A, x, y)
         raw_reach_rels = raw_reach_rels.filter(rel => {
             let entry = tc.get(rel.state)
@@ -646,11 +674,11 @@ export class Session {
         // 0. Collect initial nodes
         let starting_atoms = this.collectInitialGraphsAndNodes()
 
-        // 1. Extract latest footprints
-        this.extractFootprints(starting_atoms)
-        
-        // 2. Process and Saturate! 
+        // 1. Process and Saturate! 
         this.produceGraphModelRec(starting_atoms)
+        
+        // 2. Extract latest footprints (possibly, aliasing groups of node sets)
+        this.extractFootprints(starting_atoms)
 
         // 3. Collect reachability information
         let non_null_nodes = this.graph_nodes.filter(n => !n.isNull)
@@ -745,7 +773,7 @@ export class Session {
     }
 
     private collectReachInfo(rel_name: string, graph: Graph, 
-                             pred_node: GraphNode, succ_node: GraphNode): (state: State) => boolean {
+                             pred_node: GraphNode, succ_node: GraphNode): (state: State) => [boolean, Status] {
 
         /** Step 1 -- decode the reachability function that depends on an edge graph */
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
@@ -769,25 +797,25 @@ export class Session {
         let $$ = $$_maybe![1]
         
         // e.g. $$(h: Heap, g: Set[Ref]): Set[Edge]
-        let inner_fun = (state: string) => Session.appleEntry($$, [state, graph.val])
+        let inner_fun = (stateval: string) => Session.appleEntry($$, [stateval, graph.val])
         
 
         /** Step 3 -- combine the decoded functions */
         return (state: State) => {
-            let edge_graph = inner_fun(state.val)
-            let predicate_val = outer_fun(edge_graph)
+            let [edge_graph, inner_status] = inner_fun(state.val)
+            let [predicate_val, outer_status] = outer_fun(edge_graph)
             if (predicate_val !== 'true' && predicate_val !== 'false') {
                 throw `got unexpected value for a reachability predicate: ${predicate_val}`
             }
             if (predicate_val === 'true') {
-                return true
+                return [true, outer_status]  // keep only outer function's status
             } else {
-                return false
+                return [false, outer_status] // keep only outer function's status
             }
         }
     }
 
-    private collectFieldValueInfo(node: Node, fname: string): (state: State) => Node | undefined {
+    private collectFieldValueInfo(node: Node, fname: string): (state: State) => [Node | undefined, Status] {
         let rel_name = this.fieldLookupRelationName(fname)
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
         if (!rel_maybe) {
@@ -799,8 +827,9 @@ export class Session {
         }
         let field_node_val = this.fieldNodeValue(fname)
         let simple_fun = this.partiallyApplyFieldMapEntry(<MapEntry> rel, node.val, field_node_val)
+
         return (state: State) => {
-            let succ_innerval = simple_fun(state.val)
+            let [succ_innerval, status] = simple_fun(state.val)
             let field_type = this.viperTypes!.get(fname)
 
             // Check the value type. If the type in the model contradicts the field type, 
@@ -810,7 +839,7 @@ export class Session {
                 !isPerm(field_type) && this.isFloatLiteral(succ_innerval)) {
 
                 Logger.info(`ignoring field value ${succ_innerval} which is of inconsistent type in the model`)
-                return undefined
+                return [undefined, status]
             }
             
             let key = EquivClasses.key(succ_innerval, field_type)
@@ -836,7 +865,7 @@ export class Session {
                 succ = aliasing_succs.pop()!
                 this.nonAliasingNodesMap.set(key, succ)
             }
-            return succ
+            return [succ, status]
         }
     }
 
@@ -876,57 +905,64 @@ export class Session {
       *              value: "$Ref!val!1"
       */
      private static __wildcard_symbol = '@@wild@card@@'
-     private static evalEntry(entry: ModelEntry, args: Array<string | undefined>): string {
+     private static evalEntry(entry: ModelEntry, args: Array<string | undefined>): [string, Status] {
         if (entry.type === 'constant_entry') {
-            return getConstantEntryValue(entry)
+            return [getConstantEntryValue(entry), 'constant']
 
         } else if (entry.type === 'application_entry') {
+            let res: string 
             let app_entry = (<ApplicationEntry> entry)
             let fun = app_entry.value.name
             let fun_args = app_entry.value.args
-            let sub_results = fun_args.map(fun_arg => Session.evalEntry(fun_arg, args))
+            let sub_results = fun_args.map(fun_arg => Session.evalEntry(fun_arg, args)[0])
             if (fun === 'and') {
                 // do all arguments evaluate to 'true'?
-                return sub_results.every(sub_res => sub_res === 'true') ? 'true' : 'false'
+                res = sub_results.every(sub_res => sub_res === 'true') ? 'true' : 'false'
             } else if (fun === 'or') {
                 // do some arguments evaluate to 'true'?
-                return sub_results.some(sub_res => sub_res === 'true') ? 'true' : 'false'
+                res = (sub_results.some(sub_res => sub_res === 'true')) ? 'true' : 'false'
             } else if (fun === 'not' || fun === '!') {
                 // negate the argument 
-                return sub_results[0] === 'true' ? 'false' : 'true'
+                res = (sub_results[0] === 'true') ? 'false' : 'true'
             } else if (fun === '=') {
                 // check that all arguments of '=' evaluate to the same value
                 let sub_result_set = new Set(sub_results)
                 if (sub_result_set.size === 1) {
                     // All arguments are equal
-                    return 'true'
+                    return ['true', 'fun_app']
                 } else if (sub_result_set.size === 2 && sub_result_set.has(this.__wildcard_symbol)) {
                     // All arguments are either equal to some value or match a wildcard argument
-                    return 'true'
+                    return ['true', 'fun_app']
                 } else {
                     // Some arguments did not match this case
-                    return 'false'
+                    return ['false', 'fun_app']
                 }
             } else if (fun === ':var') {
                 let arg_index = parseInt(getConstantEntryValue(fun_args[0]))
                 let arg = args[arg_index]
-                return arg === undefined ? this.__wildcard_symbol : arg
+                // Undefined args correspond to wildcards in the contex of partial function applications.
+                // For example, if a predicate P is defined in the model as "(and (= (:var 0) 22) (= (:var 1) 33) (= (:var 2) 44))", 
+                //  then P(x,y,z) is true **iff** x=22|wildcard, y=33|wildcard, z=44|wildcard; 
+                //  e.g., P(22, 33, 44) and P(22, wildcard, 44) hold, while e.g. P(88, wildcard, 44) does not hold. 
+                res = (arg === undefined) ? this.__wildcard_symbol : arg
             } else {
                 throw `unsupported function: '${fun}'`
             }
+            return [res, 'fun_app']
             
         } else {
             return Session.appleEntry(entry, args)
         }
     }
 
-    static appleEntry(entry: ModelEntry, args: Array<string | undefined>): string {
+    static appleEntry(entry: ModelEntry, args: Array<string | undefined>): [string, Status] {
         if (entry.type === 'constant_entry') {
             let const_entry = <ConstantEntry> entry
-            return const_entry.value
+            return [const_entry.value, 'constant']
         } else if (entry.type === 'application_entry') {
             let app_entry = (<ApplicationEntry> entry)
-            return Session.evalEntry(app_entry, args)
+            let [app_value, _] = Session.evalEntry(app_entry, args)
+            return [app_value, 'fun_app']
         } else {
             let map_entry = <MapEntry> entry
             let res_entry_maybe = map_entry.cases.find(map_case => {
@@ -943,12 +979,12 @@ export class Session {
             })
             if (res_entry_maybe) {
                 let case_entry = res_entry_maybe!.value
-                let case_val = Session.appleEntry(case_entry, args)
-                return case_val
+                let [case_val, _] = Session.appleEntry(case_entry, args)
+                return [case_val, 'from_cases']  // track only top-level status 
             } else {
                 let default_entry = map_entry.default
-                let default_val = Session.appleEntry(default_entry, args)
-                return default_val
+                let [default_val, _] = Session.appleEntry(default_entry, args)
+                return [default_val, 'default'] // track only top-level status 
             } 
         }
     }
@@ -961,12 +997,7 @@ export class Session {
 
     /** Returns true iff 'lhs' is the name of the prototype of the 'rhs' */
     private isPrototypeOf(proto: string, name: string) {
-        if (this.isCarbon()) {
-            return name.split('@')[0] === proto
-        } else {
-            // TODO: check this
-            return name.split('@')[0] === proto
-        }
+        return this.innerToProto(name) === proto
     }
 
     private collectStates(): Array<State> {
@@ -981,7 +1012,7 @@ export class Session {
         }).map(pair => new State(pair[0], (<ConstantEntry> pair[1]).value))
     }
 
-    private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => string {
+    private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => [string, Status] {
         let res_map = new Map<string, string>()
 
         m_entry.cases.forEach(map_case => {
@@ -1006,14 +1037,14 @@ export class Session {
 
         return (edge_graph: string) => {
             if (res_map.has(edge_graph)) {
-                return res_map.get(edge_graph)!
+                return [res_map.get(edge_graph)!, 'from_cases']
             } else {
-                return default_val
+                return [default_val, 'default']
             }
         }
     }
 
-    private partiallyApplyFieldMapEntry(m_entry: MapEntry, reciever: string, field: string | undefined): (state: string) => string {
+    private partiallyApplyFieldMapEntry(m_entry: MapEntry, reciever: string, field: string | undefined): (state: string) => [string, Status] {
         let res_map = new Map<string, string>()
 
         let state_index: number
@@ -1065,9 +1096,9 @@ export class Session {
         
         return (state: string) => {
             if (res_map.has(state)) {
-                return res_map.get(state)!
+                return [res_map.get(state)!, 'from_cases']
             } else {
-                return default_val
+                return [default_val, 'default']
             }
         }
     }
@@ -1097,7 +1128,7 @@ export class Session {
         }
     }
 
-    private applySetInMapEntry(entry: ModelEntry, graph: Graph, node: GraphNode): string {
+    private applySetInMapEntry(entry: ModelEntry, graph: Graph, node: GraphNode): [string, Status] {
         if (this.isCarbonTypeEncodingA()) {
             return Session.appleEntry(entry, [undefined, undefined, graph.val, node.val])
         } else if (this.isCarbonTypeEncodingP()) {
@@ -1119,14 +1150,14 @@ export class Session {
             if (!U_2_bool) {
                 throw `cannot interpret value '${innerval}' of uninterpreted type to Boolean: model does not define 'U_2_bool'`
             }
-            let bool_str = Session.appleEntry(U_2_bool, [innerval])
+            let [bool_str, _] = Session.appleEntry(U_2_bool, [innerval])
             if (bool_str !== 'true' && bool_str !== 'false') {
-                throw `cannot parse value '${bool_str}' as Boolean`
+                throw `cannot interpret value '${bool_str}' as Boolean`
             }
             return bool_str === 'true'
         } else {
             if (innerval !== 'true' && innerval !== 'false') {
-                throw `cannot parse value '${innerval}' as Boolean`
+                throw `cannot interpret value '${innerval}' as Boolean`
             }
             return innerval === 'true'
         }
@@ -1152,6 +1183,10 @@ export class Session {
         let m1 = inner_name.match(/(.*)@(\d+)/)
         if (m1 !== null) {
             return { proto: m1[1], index: parseInt(m1[2]) }
+        }
+        let m0 = inner_name.match(/(.*)_(\d+)/)
+        if (m0 !== null) {
+            return { proto: m0[1], index: parseInt(m0[2]) }
         }
         return { proto: inner_name }
     }

@@ -1,4 +1,4 @@
-import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Node, Relation, State } from "./Models";
+import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Node, Relation, State, Status } from "./Models";
 
 export interface RenderOpts {
     is_carbon: boolean,
@@ -144,16 +144,26 @@ export class DotGraph {
                 val = this.renderNodeValue(succ)
             }
 
+            let status = field.status === 'default' ? `*` : ``
+
             return `<TR><TD align="text" BGCOLOR="#ffffff" PORT="${field.name}@${field.state.name}">` + 
-                `${field.name}${state}` +
+                `${status}${field.name}${state}` +
                 (this.isFieldValueNull(field) ? ` = null` : (!this.isFieldRef(field) ? ` = ${val}` : ``)) +
                 `<BR ALIGN="left" /></TD></TR>`
                    
         }).join('\n\t\t') + `\n`
     }
 
-    private renderNode(node: GraphNode): string {
+    private renderNode(node: GraphNode, graph: Graph | undefined = undefined): string {
+        let status: string
+        if (graph !== undefined) {
+            status = (graph.getNodeStatus(node) === 'default') ? `*` : ``
+        } else {
+            status = ``
+        }
         let head_label = node.isLocal ? `${node.proto} = ${this.renderNodeValue(node)}` : this.renderNodeValue(node)
+        head_label = `${status}${head_label}`
+
         let table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
                     `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>${head_label}</B></FONT></TD></TR>\n` + 
                     `\t\t` + this.nodeFields(node) + 
@@ -165,7 +175,7 @@ export class DotGraph {
         return `subgraph cluster_${graph.id} {\n` + 
                 `\t\t${this.clusterPreamble(DotGraph.REACH_COLOR, DotGraph.GRAPH_BGCOLOR)}\n` + 
                 `\t\tlabel="${graph.repr(true, true)} = ${this.renderNodeValue(graph)}";\n` + 
-                `\t${graph.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
+                `\t${graph.mapNodes(node => this.renderNode(node, graph)).join('\n\t')}\n\t}`
     }
 
     private renderCalleeGraph(): string {
@@ -173,7 +183,7 @@ export class DotGraph {
         return `subgraph cluster_${callee.id} {\n` + 
                `\t\t${this.clusterPreamble(DotGraph.CALLEE_COLOR, DotGraph.CALLEE_BGCOLOR)}\n` + 
                `\t\tlabel="${callee.repr(true, true)} = ${this.renderNodeValue(callee)}";\n` + 
-               `\t${callee.nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
+               `\t${callee.mapNodes(node => this.renderNode(node, callee)).join('\n\t')}\n\t}`
     }
 
     private renderClientGraph(): string {
@@ -183,14 +193,14 @@ export class DotGraph {
 
         let callee_str = this.renderCalleeGraph()
 
-        let callee_nodes = new Set(callee.nodes)
-        let frame_nodes = client.nodes.filter(node => !callee_nodes.has(node))
+        let callee_nodes = callee.getNodesSet()
+        let frame_nodes = client.filterNodes(node => !callee_nodes.has(node))
 
         return `subgraph cluster_${client.id} {\n` + 
                 `\t\t${this.clusterPreamble(DotGraph.CLIENT_COLOR, DotGraph.CLIENT_BGCOLOR)}\n` + 
                 `\t\tlabel="${client.repr(true, true)} = ${this.renderNodeValue(client)}";\n` + 
                 `\t${callee_str}\n` + 
-                `\t${frame_nodes.map(node => this.renderNode(node)).join('\n\t')}\n\t}`
+                `\t${frame_nodes.map(node => this.renderNode(node, client)).join('\n\t')}\n\t}`
     }
 
     private renderFieldRelation(field: Relation): string {
@@ -202,11 +212,12 @@ export class DotGraph {
                   `but N${field.pred_id} or N${field.succ_id} are not`
         }
 
+        let status = field.status === 'default' ? `labeldistance=0 taillabel=<*>` : ``
         if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
-            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD":e;`
+            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD":e [${status}];`
         } else {
-            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD";`
+            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD" [${status}];`
         }
     }
 
@@ -233,14 +244,15 @@ export class DotGraph {
             graph_lbl = (this.__graph_map.size > 1) ? `(${graph.repr(true, true)})` : ``
             color = DotGraph.REACH_COLOR
         }
+        let status = rel.status === 'default' ? `labeldistance=0 taillabel=<<FONT COLOR="${color}">*</FONT>>` : ``
         let label = `<<FONT COLOR="${color}">${rel.name}${state}${graph_lbl}</FONT>>`
         let dashed = rel.name === 'P' ? `` : `style="dashed"`
         // let constrant = rel.name === 'P' ? `true` : `false`
-        let constrant = rel.name === `true`
+        let constrant = `false`
         if (is_mutual) {
-            return `N${pred.id} -> N${succ.id} [label=${label} color="${color}" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ];`
+            return `N${pred.id} -> N${succ.id} [label=${label} ${status} color="${color}" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ];`
         } else {
-            return `N${pred.id} -> N${succ.id} [label=${label} color="${color}" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ];`
+            return `N${pred.id} -> N${succ.id} [label=${label} ${status} color="${color}" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ];`
         }
     }
 
@@ -334,7 +346,7 @@ export class DotGraph {
             footprint_ids.add(this.__callee.id)
         }
 
-        let nodes_in_graphs = new Set(model.graphs.flatMap(graph => graph.nodes))
+        let nodes_in_graphs = new Set(model.graphs.flatMap(graph => graph.getNodesArray()))
         let outer_nodes = model.graphNodes.filter(node => 
             !node.isNull && !nodes_in_graphs.has(node)).map(node => this.renderNode(node)).join('\n\t')
         let edges = model.fields.filter(field => 

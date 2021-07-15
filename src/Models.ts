@@ -183,8 +183,10 @@ export class GraphNode extends Node {
 
 export class Graph extends Node {
 
-    constructor(readonly nodes: Array<GraphNode>, 
-                public aliases: Array<string>, 
+    private readonly nodes: Array<GraphNode> = []
+    private readonly statuses: {[NodeId: number]: Status} = {}
+
+    constructor(public aliases: Array<string>, 
                 readonly id: number, 
                 readonly val: string, 
                 readonly isLocal: boolean,
@@ -192,15 +194,52 @@ export class Graph extends Node {
 
         super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, isLocal, proto)
     }
+
+    public addNode(node: GraphNode, status: Status): void {
+        if (this.hasNode(node)) {
+            throw `graph ${this.repr()} already has ${node.repr()}`
+        }
+        this.nodes.push(node)
+        this.statuses[node.id] = status
+    }
+
+    public getNodesSet(): Set<GraphNode> {
+        return new Set(this.nodes)
+    }
+
+    public getNodesArray(): Array<GraphNode> {
+        return this.nodes
+    }
+
+    public hasNode(node: GraphNode): boolean {
+        return this.statuses.hasOwnProperty(node.id)
+    }
+
+    public getNodeStatus(node: GraphNode): Status {
+        if (this.hasNode(node)) {
+            return this.statuses[node.id]
+        } else {
+            throw `graph ${this.repr()} does not contain ${node.repr()}`
+        }
+    }
+
+    public mapNodes<U>(callbackfn: (value: GraphNode, index: number, nodes: Array<GraphNode>) => U, thisArg?: any): Array<U> {
+        return Array.from(this.nodes).map(callbackfn, thisArg)
+    }
+    public filterNodes(predicate: (value: GraphNode, index: number, array: Array<GraphNode>) => boolean, thisArg?: any): Array<GraphNode> {
+        return Array.from(this.nodes).filter(predicate, thisArg)
+    }
 }
 
+export type Status = 'from_cases' | 'constant' | 'fun_app' | 'default' | 'unknown'
 
 export class Relation {
     protected _: string
     constructor(readonly name: string,  // e.g. "NEXT", "edge", or "exists_path"
                 readonly state: State,  // e.g. { name: "Heap@@1", val: "T@U!val!11" }
                 readonly pred_id: number, 
-                readonly succ_id: number) {
+                readonly succ_id: number, 
+                readonly status: Status = 'unknown') {
     
         this._ = `${name}[ ${state.name} ](N${pred_id}, N${succ_id})`
     }
@@ -215,9 +254,10 @@ export class LocalRelation extends Relation {
                 readonly state: State, 
                 readonly graph_id: number, 
                 readonly pred_id: number, 
-                readonly succ_id: number) {
+                readonly succ_id: number, 
+                readonly status: Status = 'unknown') {
     
-        super(name, state, pred_id, succ_id)
+        super(name, state, pred_id, succ_id, status)
         this._ = `${name}[ ${state.name} ](G${graph_id}, N${pred_id}, N${succ_id})`
     }
 }
@@ -247,7 +287,7 @@ export class EquivClasses {
     
     // mapping keys to nodes
     private __buf: { 
-        [Key: string]: Array<Node>
+        [Key: string]: Array<Node>,
     } = {}
 
     public static key(innerval: string, type: ViperType): string {
