@@ -435,7 +435,7 @@ export class Session {
         }
     }
 
-    private extractFootprints(atoms: Array<Node>): void {
+    private extractFootprints(): void {
         let client_footprint_max_index = -Infinity
         let callee_footprints_max_index = -Infinity
         this.graphs.forEach(nodeset => {
@@ -448,7 +448,7 @@ export class Session {
             graph.aliases.forEach(alias => {
                 // Handle the case in which there are several aliasing node sets 
                 //  that potentially represent the footprints
-                let {proto, suffix, index} = Session.innerNameParser(graph.aliases[0])
+                let {proto, suffix, index} = Session.innerNameParser(alias)
                 if (proto === 'G') {
                     is_client_footprint_proto = true
                     if (index === undefined) {
@@ -692,7 +692,7 @@ export class Session {
         this.produceGraphModelRec(starting_atoms)
         
         // 2. Extract latest footprints (possibly, aliasing groups of node sets)
-        this.extractFootprints(starting_atoms)
+        this.extractFootprints()
 
         // 3. Collect reachability information
         let non_null_nodes = this.graph_nodes.filter(n => !n.isNull)

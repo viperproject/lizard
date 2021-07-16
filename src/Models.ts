@@ -2,7 +2,7 @@
 export type SmtBool = 'unspecified' | 'true' | 'false'
 
 export function castToSmtBool(val: string): SmtBool {
-    if (['unspecified', 'true', 'false'].includes(val)) {
+    if (['#unspecified', 'true', 'false'].includes(val)) {
         return <SmtBool> val
     } else {
         throw `cannot cast ${val} to SmtBool`
