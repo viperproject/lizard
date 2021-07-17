@@ -277,7 +277,8 @@ export class LocalRelation extends Relation {
 
 export class State { 
     constructor(readonly name: string,
-                readonly val: string) {}
+                readonly val: string, 
+                readonly aliases: Array<string> = new Array(name)) {}
 }
 
 export class GraphModel {

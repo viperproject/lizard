@@ -195,7 +195,7 @@ export class Session {
             // e.g. "X@1" is an inner name for the prototype "X"
             (innername: string) => Session.innerToProto(this.isCarbon(), innername))  
 
-        // 1. Collect program states 
+        // 1. Collect program states and merge the potential aliases among them
         this.states = this.collectStates()
 
         // 2. Extract all atoms (i.e. top-level constant_entries) from the raw model. 
@@ -212,12 +212,12 @@ export class Session {
         })
 
         // 3. Compute equivalence classes amongst all atoms
-        this.collectEquivClasses(this.atoms!, this.extended_equiv_classes)
+        Session.collectEquivClasses(this.atoms!, this.extended_equiv_classes)
     }
 
     private equiv_classes = new EquivClasses()
 
-    private collectEquivClasses(nodes: Array<Node>, ec: EquivClasses): void {
+    private static collectEquivClasses(nodes: Array<Node>, ec: EquivClasses): void {
         nodes.forEach(node => {
             let key: [string, ViperType] = [node.val, node.type]
             if (ec.has(...key)) {
@@ -250,9 +250,8 @@ export class Session {
                 atom
             })*/)
 
-        // Check that all expected nodes are defined in each state
         if (atoms.length < names.length) {
-            Logger.warn(`could not find some atom definitions in raw model`)
+            Logger.error(`could not find some atom definitions in raw model`)
         }
 
         // Filter old versions of variables in case the encoding uses SSA
@@ -267,10 +266,9 @@ export class Session {
         let new_nonaliasing_nodes = new Set<Node>()
 
         nodes.forEach(node => {
-            // TODO: decide what to check and/or report in this case
-            // if (node.aliases.length > 1) {
-            //     Logger.warn(`...`)
-            // }
+            if (node.aliases.length > 1) {
+                Logger.error(`mergeAliases should be invoked over nodes that have only one alias (not the case for ${node.repr()})`)
+            }
             let node_name = node.aliases[0]
 
             let key = EquivClasses.key(node.val, node.type)
@@ -396,7 +394,7 @@ export class Session {
         })
 
         // B. Deduce and merge aliasing nodes 
-        this.collectEquivClasses(starting_atoms, this.equiv_classes)
+        Session.collectEquivClasses(starting_atoms, this.equiv_classes)
         let new_nonaliasing_nodes = this.mergeAliases(starting_atoms)
 
         // C. Group nodes by type: Ref, Set[Ref], Others
@@ -1012,7 +1010,8 @@ export class Session {
     }
 
     private collectStates(): Array<State> {
-        return Object.entries(this.model!).filter(pair => {
+        // Collect states as inner values of the SMT model
+        let states = Object.entries(this.model!).filter(pair => {
             let entry_name = pair[0]
             let entry = pair[1]
             if (this.isCarbon()) {
@@ -1021,6 +1020,19 @@ export class Session {
                 return entry.type === 'constant_entry' && (<ConstantEntry> entry).value.startsWith('$FVF<')
             }
         }).map(pair => new State(pair[0], (<ConstantEntry> pair[1]).value))
+
+        // Merge aliasing states
+        let non_aliasing_states = new Map<string, State>()
+        states.forEach(state => {
+            if (non_aliasing_states.has(state.val)) {
+                let non_aliasing_state = non_aliasing_states.get(state.val)!
+                non_aliasing_state.aliases.push(state.name)
+            } else {
+                non_aliasing_states.set(state.val, state)
+            }
+        })
+        
+        return Array.from(non_aliasing_states.values())
     }
 
     private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => [SmtBool, Status] {
