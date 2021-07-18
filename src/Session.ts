@@ -368,7 +368,7 @@ export class Session {
         graphs.forEach(graph => {
             nodes.forEach(node => {
                 let [val, status] = this.applySetInMapEntry(rel!, graph, node)
-                if (this.isInnerValueTrue(val) === 'true') {
+                if (this.parseInnervalAsSmtBool(val) === 'true') {
                     // this node belongs to this graph
                     graph.addNode(node, status)
                 }
@@ -1080,7 +1080,7 @@ export class Session {
                     // The expected arguments of $state are: (1) heap/state, (2) current_footprint, (3) state_name
                     //  we substitute these as follows:          raw_state       wildcard               state_name.val
                     let [res, status] = Session.appleEntry(state_lbl_entry, [raw_state.val, undefined, state_entry.value])
-                    if (this.isInnerValueTrue(res)) {
+                    if (this.parseInnervalAsSmtBool(res)) {
                         let proper_state = new State(state_name, raw_state.val, raw_state.aliases)
                         remapped_states.add(proper_state)
                     }
@@ -1215,7 +1215,7 @@ export class Session {
         }
     }
 
-    private isInnerValueTrue(innerval: string): SmtBool {
+    private parseInnervalAsSmtBool(innerval: string): SmtBool {
         if (innerval === 'true') {
             return 'true'
         }
