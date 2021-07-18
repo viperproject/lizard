@@ -93,7 +93,7 @@ export class DotGraph {
     }
 
     private edgePreamble(): string {
-        return `edge [fontname="Helvetica" arrowsize=0.4]`
+        return `edge [fontname="Helvetica" fontsize="12" arrowsize=0.4]`
     }
 
     private nodeSettings(node: Node) { 
@@ -217,6 +217,10 @@ export class DotGraph {
                 `\t${frame_nodes.map(node => this.renderNode(node, client)).join('\n\t')}\n\t}`
     }
 
+    private renderStateLabel(state: State): string {
+        return (this.__state_map.size > 1) ? `<SUB><FONT POINT-SIZE="10">${state.name}</FONT></SUB>` : ``
+    }
+
     private renderFieldRelation(field: Relation): string {
         let pred = this.getGraphNodeById(field.pred_id)
         let succ = this.getGraphNodeById(field.succ_id)
@@ -228,7 +232,7 @@ export class DotGraph {
 
         let status = field.status === 'default' ? `labeldistance=0 taillabel=<*>` : ``
         if (this.opts.dotnodes) {
-            let state_lbl = (this.__state_map.size > 1) ? `@${field.state.name}` : ``
+            let state_lbl = this.renderStateLabel(field.state)
             return `N${pred.id} -> N${succ.id} [label=<${field.name}${state_lbl}> ${status}]`
         } else if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
@@ -248,7 +252,7 @@ export class DotGraph {
                   `but some of these were not: G${rel.graph_id}, N${rel.pred_id}, or N${rel.succ_id}`
         }
 
-        let state = (this.__state_map.size > 1) ? `<SUB>${rel.state.name}</SUB>` : ``
+        let state = this.renderStateLabel(rel.state)
         let graph_lbl 
         let color 
         if (graph === this.__client) {
