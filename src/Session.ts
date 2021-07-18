@@ -198,7 +198,11 @@ export class Session {
         // 1. Collect program states and merge the potential aliases among them
         this.states = this.collectStates()
 
-        // 2. Extract all atoms (i.e. top-level constant_entries) from the raw model. 
+        // 2. If the program is instrumented with a $state(G:Set[Ref], state_id:Int) function, 
+        //    remap the states to those that have explicit labels
+        this.states = this.remapStates(this.states)
+
+        // 3. Extract all atoms (i.e. top-level constant_entries) from the raw model. 
         this.atoms = new Array<Node>()
         Object.entries(this.model!).forEach(pair => {
             let name = pair[0]
@@ -1035,6 +1039,56 @@ export class Session {
         return Array.from(non_aliasing_states.values())
     }
 
+    private static isStateLabel(idn: string): boolean {
+        let m = idn.match(/^l\d+$/)
+        return m !== null && m !== undefined
+    }
+
+    private getStateNames(): Array<string> {
+        return this.programDefinitions!.filter(def => 
+            Session.isStateLabel(def.name)).map(state_lbl_def => state_lbl_def.name)
+    }
+
+    private remapStates(states: Array<State>): Array<State> {
+        let state_lbl_fun = Object.entries(this.model!).find(pair => pair[0] === '$state')
+        if (state_lbl_fun === undefined) {
+            return states
+        } else {
+            // 0. Find the defined state names, e.g. l0, l1, l2, ...
+            let state_names = new Set(this.getStateNames())
+
+            // 1. Find entries for each state name, 
+            //    e.g. l0:{type:"constant_entry", value:"T@U!val!1"}
+            let state_name_entries = new Map<string, ConstantEntry>()
+            Object.entries(this.model!).forEach(pair => {
+                let entry_name = pair[0]
+                let entry = pair[1]
+                if (state_names.has(entry_name)) {
+                    if (entry.type !== 'constant_entry') {
+                        throw `expected constant_entry for '${entry_name}' in the model, but found ${entry.type}`
+                    } else {
+                        state_name_entries.set(entry_name, <ConstantEntry> entry)
+                    }
+                }
+            })
+
+            // 2. Map raw states to state names using the $state function
+            let state_lbl_entry = state_lbl_fun[1]
+            let remapped_states = new Set<State>()
+            states.forEach(raw_state => 
+                state_name_entries.forEach((state_entry, state_name) => {
+                    // The expected arguments of $state are: (1) heap/state, (2) current_footprint, (3) state_name
+                    //  we substitute these as follows:          raw_state       wildcard               state_name.val
+                    let [res, status] = Session.appleEntry(state_lbl_entry, [raw_state.val, undefined, state_entry.value])
+                    if (this.isInnerValueTrue(res)) {
+                        let proper_state = new State(state_name, raw_state.val, raw_state.aliases)
+                        remapped_states.add(proper_state)
+                    }
+                }))
+            return Array.from(remapped_states)
+        }
+    }
+
     private partiallyApplyReachabilityRelation(m_entry: MapEntry, pred: string, succ: string): (edge_graph: string) => [SmtBool, Status] {
         let res_map = new Map<string, string>()
 
@@ -1168,16 +1222,33 @@ export class Session {
         if (innerval === 'false') {
             return 'false'
         }
+        if (innerval === '#unspecified') {
+            return 'unspecified'
+        }
         if (this.isCarbon()) {
             let U_2_bool = this.getEntryByName('U_2_bool')
             if (!U_2_bool) {
-                throw `cannot interpret value '${innerval}' of uninterpreted type to Boolean: model does not define 'U_2_bool'`
+                throw `cannot interpret value '${innerval}' of uninterpreted type as Boolean: model does not define 'U_2_bool'`
             }
             let [bool_str, _] = Session.appleEntry(U_2_bool, [innerval])
             if (bool_str === '#unspecified') {
-                return 'unspecified'
-            }
-            if (bool_str !== 'true' && bool_str !== 'false') {
+                let bool_2_U = this.getEntryByName('bool_2_U')
+                if (!bool_2_U) {
+                    throw `cannot interpret value '${innerval}' of uninterpreted type as Boolean: model does not define 'bool_2_U'`
+                }
+                let [true_innerval, _1] = Session.appleEntry(bool_2_U, ['true'])
+                let [false_innerval, _2] = Session.appleEntry(bool_2_U, ['false'])
+                if (true_innerval === false_innerval) {
+                    throw `model assignes the same innerval to true and false (${true_innerval}); this may be a bug in Z3`
+                }
+                if (true_innerval !== '#unspecified' && innerval === true_innerval) {
+                    return 'true'
+                } else if (false_innerval !== '#unspecified' && innerval === false_innerval) {
+                    return 'false'
+                } else {
+                   throw `cannot interpret value '${bool_str}' as Boolean` 
+                }
+            } else if (bool_str !== 'true' && bool_str !== 'false') {
                 throw `cannot interpret value '${bool_str}' as Boolean`
             }
             return bool_str
@@ -1195,6 +1266,11 @@ export class Session {
     private fieldNodeValue(fname: string): string | undefined {
         if (this.isCarbon()) {
             let field_node_entry = this.model![fname]
+            if (field_node_entry === undefined) {
+                throw `cannot find model entry with expected name '${fname}'. Try renaming this identifier to avoid it being renamed by the translation`
+            } else if (field_node_entry.type !== 'constant_entry') {
+                throw `field '${fname}' is not represented as a constant in the model (fields of non-scalar types are not supported)`
+            }
             let field_node_val = getConstantEntryValue(field_node_entry)
             return field_node_val
         } else {
