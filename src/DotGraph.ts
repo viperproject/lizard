@@ -2,7 +2,8 @@ import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Node, Relat
 
 export interface RenderOpts {
     is_carbon: boolean,
-    rankdir_lr: boolean
+    rankdir_lr: boolean,
+    dotnodes: boolean
 }
 
 type ReachKey = string
@@ -87,7 +88,8 @@ export class DotGraph {
         return `graph [labelloc="t" style="rounded" fontname="Helvetica" color="${color}" bgcolor="${bgcolor}" margin=18];`
     }
     private nodePreamble(): string {
-        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=0.05];`
+        let margin = this.opts.dotnodes ? '0.03' : '0.05'
+        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=${margin}];`
     }
 
     private edgePreamble(): string {
@@ -124,10 +126,11 @@ export class DotGraph {
         }
     }
 
-    private nodeFields(node: GraphNode): string {
+    private nodeFields(node: GraphNode, only_scalar: boolean = false): string {
         return node.fields.filter(field => 
             this.__state_map.has(field.state.name))
-        .map(field => {  
+        .flatMap(field => {  
+
             let state = (this.__state_map.size > 1) ? `[${field.state.name}]` : ``
             let succ = this.getGraphNodeById(field.succ_id)
 
@@ -139,6 +142,9 @@ export class DotGraph {
                     throw `there shouldn't be any unhashed nodes if the saturation mechanism is working properly, but N${field.succ_id} is not hashed`
                 }
                 val = this.renderNodeValue(scalar_succ)
+            } else if (only_scalar) {
+                // Skip Ref-fields
+                return []
             } else {
                 // Treat as Ref-field
                 val = this.renderNodeValue(succ)
@@ -146,10 +152,10 @@ export class DotGraph {
 
             let status = field.status === 'default' ? `*` : ``
 
-            return `<TR><TD align="text" BGCOLOR="#ffffff" PORT="${field.name}@${field.state.name}">` + 
+            return [`<TR><TD align="text" BGCOLOR="#ffffff" PORT="${field.name}@${field.state.name}">` + 
                 `${status}${field.name}${state}` +
                 (this.isFieldValueNull(field) ? ` = null` : (!this.isFieldRef(field) ? ` = ${val}` : ``)) +
-                `<BR ALIGN="left" /></TD></TR>`
+                `<BR ALIGN="left" /></TD></TR>`]
                    
         }).join('\n\t\t') + `\n`
     }
@@ -164,10 +170,18 @@ export class DotGraph {
         let head_label = node.isLocal ? `${node.proto} = ${this.renderNodeValue(node)}` : this.renderNodeValue(node)
         head_label = `${status}${head_label}`
 
-        let table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
+        let table: string
+        if (this.opts.dotnodes) {
+            table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
+                    `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>${head_label}</B></FONT></TD></TR>\n` + 
+                    `\t\t` + this.nodeFields(node, true) + 
+                    `\t\t</TABLE>`
+        } else {
+            table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
                     `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>${head_label}</B></FONT></TD></TR>\n` + 
                     `\t\t` + this.nodeFields(node) + 
                     `\t\t</TABLE>`
+        }
         return `"N${node.id}" [${this.nodeSettings(node)} label=<${table}> ];`
     }
 
@@ -213,7 +227,10 @@ export class DotGraph {
         }
 
         let status = field.status === 'default' ? `labeldistance=0 taillabel=<*>` : ``
-        if (pred.id === succ.id && this.opts.rankdir_lr) {
+        if (this.opts.dotnodes) {
+            let state_lbl = (this.__state_map.size > 1) ? `@${field.state.name}` : ``
+            return `N${pred.id} -> N${succ.id} [label=<${field.name}${state_lbl}> ${status}]`
+        } else if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
             return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD":e [${status}];`
         } else {

@@ -28,7 +28,8 @@ export class DebuggerPanel {
 
     constructor(readonly extensionPath: string,
                 readonly queryHandler: (q: Query) => any,
-                readonly toggleGraphRankDir: () => any) {
+                readonly toggleGraphRankDir: () => any,
+                readonly toggleDotNodes: () => any) {
 
         this.panel = vscode.window.createWebviewPanel(
             'viperDebugPanel',
@@ -87,6 +88,10 @@ export class DebuggerPanel {
 
             case 'toggleRankDir': 
                 this.toggleGraphRankDir()
+                break
+
+            case 'toggleDotNodes': 
+                this.toggleDotNodes()
                 break
 
             default:

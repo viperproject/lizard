@@ -8,6 +8,7 @@ declare var acquireVsCodeApi: any
 export const vscode = acquireVsCodeApi()
 
 const domElem = (q: string) => document.querySelector<HTMLElement>(q)!
+const domElems = (q: string) => document.querySelectorAll<HTMLElement>(q)
 
 function removeAllChildren(elem: HTMLElement) {
     while (elem.firstChild) {
@@ -142,11 +143,20 @@ function setupInputHandlers() {
             vscode.postMessage({ command: 'filterStates', state_names: selected })
         }
     }
-
-    domElem('button#toggleRankDir').onclick = () => {
+    
+    let toggleRankDirButton = <HTMLButtonElement> domElem('button#toggleRankDir')
+    toggleRankDirButton.onclick = () => {
         const disabled = progStateSelect.hasAttribute('disabled')
         if (!disabled) {
             vscode.postMessage({ command: 'toggleRankDir' })
+        }
+    }
+
+    let toggleDotNodesButton = <HTMLButtonElement> domElem('button#toggleDotNodes')
+    toggleDotNodesButton.onclick = () => {
+        const disabled = progStateSelect.hasAttribute('disabled')
+        if (!disabled) {
+            vscode.postMessage({ command: 'toggleDotNodes' })
         }
     }
    
@@ -253,8 +263,9 @@ function displayGraph(message: any) {
 
     window.setTimeout(() => graph.style.opacity = '1', 100)
 
-    let toggleRankDirButton = <HTMLSelectElement> domElem('button#toggleRankDir')
-    toggleRankDirButton.disabled = false
+    // Enable all render-related buttons
+    let graph_buttons = domElems('#renderOptions button')
+    graph_buttons.forEach(button => (<HTMLButtonElement> button).disabled = false)
 
     Logger.info(`...Done processing display graph message.`)
 }

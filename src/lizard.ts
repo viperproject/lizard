@@ -17,6 +17,7 @@ export namespace Lizard {
         is_carbon: false,
         is_carbon_type_encoding_a: false,
         rankdir_lr: false,
+        dotnodes: false,
     }
 
     export function stop() {
@@ -50,7 +51,8 @@ export namespace Lizard {
             lizardOpts.is_carbon = session.isCarbon()
         
             if (panel) panel!.dispose()
-            panel = new DebuggerPanel(context.extensionPath, handleQuery, handleToggleGraphRankDirRequest)
+            panel = new DebuggerPanel(context.extensionPath, handleQuery, 
+                handleToggleGraphRankDirRequest, handleToggleGraphDotNodesRequest)
             panel.reveal()
         })
 
@@ -112,6 +114,12 @@ export namespace Lizard {
         function handleToggleGraphRankDirRequest() {
             Logger.info(`✓ processed toggle-rankdir request`)
             lizardOpts.rankdir_lr = !(lizardOpts.rankdir_lr)
+            render()
+        }
+
+        function handleToggleGraphDotNodesRequest() {
+            Logger.info(`✓ processed toggle-dotnodes request`)
+            lizardOpts.dotnodes = !(lizardOpts.dotnodes)
             render()
         }
         
