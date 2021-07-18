@@ -270,9 +270,6 @@ export class Session {
         let new_nonaliasing_nodes = new Set<Node>()
 
         nodes.forEach(node => {
-            if (node.aliases.length > 1) {
-                Logger.error(`mergeAliases should be invoked over nodes that have only one alias (not the case for ${node.repr()})`)
-            }
             let node_name = node.aliases[0]
 
             let key = EquivClasses.key(node.val, node.type)
@@ -1074,18 +1071,23 @@ export class Session {
 
             // 2. Map raw states to state names using the $state function
             let state_lbl_entry = state_lbl_fun[1]
-            let remapped_states = new Set<State>()
-            states.forEach(raw_state => 
-                state_name_entries.forEach((state_entry, state_name) => {
-                    // The expected arguments of $state are: (1) heap/state, (2) current_footprint, (3) state_name
-                    //  we substitute these as follows:          raw_state       wildcard               state_name.val
-                    let [res, status] = Session.appleEntry(state_lbl_entry, [raw_state.val, undefined, state_entry.value])
-                    if (this.parseInnervalAsSmtBool(res)) {
-                        let proper_state = new State(state_name, raw_state.val, raw_state.aliases)
-                        remapped_states.add(proper_state)
-                    }
-                }))
-            return Array.from(remapped_states)
+            let remapped_states = new Map<string, State>()
+            states.forEach(raw_state => {
+                if (!remapped_states.has(raw_state.val)) {
+                    state_name_entries.forEach((state_entry, state_name) => {
+                        // The expected arguments of $state are: (1) heap/state, (2) current_footprint, (3) state_name
+                        //  we substitute these as follows:          raw_state       wildcard               state_name.val
+                        let [res, status] = Session.appleEntry(state_lbl_entry, [raw_state.val, undefined, state_entry.value])
+                        if (this.parseInnervalAsSmtBool(res) === 'true') {
+                            let proper_state = new State(state_name, raw_state.val, raw_state.aliases)
+                            remapped_states.set(raw_state.val, proper_state)
+                        }
+                    })
+                }
+            })
+
+            // 3. Return sorted, named states
+            return Array.from(remapped_states.values()).sort((a: State, b: State) => a.name.localeCompare(b.name))
         }
     }
 
