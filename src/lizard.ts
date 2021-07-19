@@ -3,16 +3,26 @@ import { DebuggerPanel } from './DebuggerPanel'
 import { DotGraph, RenderOpts } from './DotGraph'
 import { viperApi } from './extension'
 import { Logger, LogLevel } from './logger'
-import { GraphModel } from './Models'
+import { GraphModel, Model } from './Models'
 import { Query } from './Query'
 import { Session, SessionOpts } from './Session'
-import { ViperLocation } from "./ViperAST"
+import { Failure } from "./ViperAST"
+
 
 export namespace Lizard {
 
+    var failures: Array<Failure> = new Array()
+    var failure_map: Map<string, Failure> = new Map()
+    var model_map: Map<string, Model> = new Map()
+    
+    var procesing: boolean = false
+    var programDefinitions: Array<any> | undefined = undefined
     var session: Session | undefined = undefined
     var panel: DebuggerPanel | undefined = undefined
+
     var sessionCounter = 0
+    var failureCounter = 0
+
     const lizardOpts: RenderOpts & SessionOpts = {
         is_carbon: false,
         is_carbon_type_encoding_a: false,
@@ -44,17 +54,28 @@ export namespace Lizard {
         viperApi.registerServerMessageCallback('program_definitions', (messageType: string, message: any) => {
             Logger.debug(`recieved message of type 'program_definitions'`)
             
-            session = new Session(lizardOpts)
-            session.parseProgramDefinitions(message.msg_body.definitions)
-
-            // Initialize rendering options
-            lizardOpts.is_carbon = session.isCarbon()
-        
+            programDefinitions = message.msg_body.definitions
+            
+            // Reset panel
             if (panel) panel!.dispose()
-            panel = new DebuggerPanel(context.extensionPath, handleQuery, 
+            panel = new DebuggerPanel(context.extensionPath, debugThisFailure, handleQuery, 
                 handleToggleGraphRankDirRequest, handleToggleGraphDotNodesRequest)
             panel.reveal()
+
+            // Reset failures for this file
+            failureCounter = 0
+            failures = new Array()
+            model_map = new Map()
+            failure_map = new Map()
+
+            // Reset states listed in the panel
+            
         })
+
+        function resetSession(): void {
+            session = new Session(lizardOpts)
+            session.parseProgramDefinitions(programDefinitions!)
+        }
 
         function tryProducingGraphModel(query?: Query, 
                                         onError?: (error: any) => void): GraphModel | undefined {
@@ -122,27 +143,25 @@ export namespace Lizard {
             lizardOpts.dotnodes = !(lizardOpts.dotnodes)
             render()
         }
-        
-        viperApi.registerServerMessageCallback('verification_result', (messageType: string, message: any) => {
-            Logger.debug(`recieved message of type 'verification_result'`)
-            let errors = message.msg_body.details.result.errors
-            if (errors.length === 0) {
-                Logger.info(`message does not contain any verification errors; nothing to debug`)
-                return    
-            }
-            if (errors.length > 1) {
-                Logger.warn(`multiple verification errors; picking the first counterexample...`)
-            } 
-            let counterexample = errors[0].counterexample
-            let error_location = errors[0].position.start
-            let error_file = errors[0].position.file
 
-            session!.setErrorLocation(new ViperLocation(error_location, error_file))
+        function debugThisFailure(failure_id: string) {
+            let failure = failure_map.get(failure_id)
+            if (failure === undefined) {
+                throw `cannot find failure with ID ${failure_id}`
+            }
+            let model = model_map.get(failure_id)
+            if (model === undefined) {
+                throw `cannot find model for failure with ID ${failure_id}`
+            }
+
+            resetSession()
+
+            session!.setErrorLocation(failure.getViperLocation())
             
-            Logger.info(`↓↓↓ Starting debug session №${++sessionCounter} for error on ${error_location} ↓↓↓`)
+            Logger.info(`↓↓↓ Starting 🦎 debug session №${++sessionCounter} for ${failure.toStr()} ↓↓↓`)
 
             // Step 1 -- preprocessing
-            session!.parseModel(counterexample.model!)
+            session!.parseModel(model)
             panel!.emitRawModel(session!.model!)
             Logger.info(`✓ parsed raw SMT model`)
             try {
@@ -166,6 +185,44 @@ export namespace Lizard {
             
             // Step 3 -- visualization
             render(graph_model)
+        }
+        
+        viperApi.registerServerMessageCallback('verification_result', (messageType: string, message: any) => {
+            Logger.debug(`recieved message of type 'verification_result'`)
+            let errors: Array<any> = message.msg_body.details.result.errors
+            if (errors.length === 0) {
+                Logger.info(`message does not contain any verification errors; nothing to debug`)
+                return    
+            }
+            if (errors.length > 1) {
+                Logger.warn(`multiple verification errors; selecting the last one to start with (use the UI for navigation)`)
+            }
+            errors.forEach((error: any) => {
+                // Extract data
+                let model = <Model> error.counterexample.model
+                let error_pos = <string> error.position.start
+                let error_file = error.position.file
+                let error_text = error.text.split('\n')[0]
+
+                // Record new failure 
+                let new_failure = Failure.from(`${++failureCounter}`, error_pos, error_file, error_text)
+                failures.push(new_failure)
+                model_map.set(new_failure.id, model)
+                failure_map.set(new_failure.id, new_failure)
+            })
+
+            if (!procesing) {
+                procesing = true
+
+                // List the currently known failures
+                panel!.listVerificationFailures(failures)
+
+                // Debug the automatically selected failure
+                let auto_selected_failure = failures[failures.length-1]
+                debugThisFailure(auto_selected_failure.id)
+
+                procesing = false
+            }
         })
     }
 }

@@ -1,18 +1,26 @@
 export class ViperLocation {
-    constructor (public loc: string,
-                 public file: string) {}
+    constructor(public file: string,
+                public line: number,
+                public column: number) {}
+
+    public static from(pos: string, file: string): ViperLocation {
+
+        let m = pos.split(':').map(str => parseInt(str))
+        let ln = m[0]
+        let col = m[1]
+    
+        return new ViperLocation(file, ln, col)
+    }
 
     public leq(other: ViperLocation): boolean {
         if (this.file !== other.file) {
             throw `locations are comparible only within the same file`
         }
-        let my_pos = this.loc.split(':').map(str => parseInt(str))
-        let my_line = my_pos[0]
-        let my_column = my_pos[1]
+        let my_line = this.line
+        let my_column = this.column
         
-        let their_pos = other.loc.split(':').map(str => parseInt(str))
-        let their_line = their_pos[0]
-        let their_column = their_pos[1]
+        let their_line = other.line
+        let their_column = other.column
 
         return my_line < their_line || 
               (my_line === their_line) && my_column <= their_column
@@ -29,6 +37,27 @@ export class ViperLocation {
             throw `scope must start and end in the same file`
         }
         return start.file === this.file && start.leq(this) && this.leq(end)
+    }
+}
+
+export class Failure {
+    constructor (readonly id: string,
+                 readonly file: string,
+                 readonly line: number, 
+                 readonly column: number, 
+                 readonly text: string) {}
+
+    public static from(id: string, pos: string, file: string, text: string): Failure {
+        let loc = ViperLocation.from(pos, file)
+        return new Failure(id, file, loc.line, loc.column, text)
+    }
+
+    public toStr(): string {
+        return `Failure ${this.id} (Ln ${this.line}, Col ${this.column})`
+    }
+
+    public getViperLocation(): ViperLocation {
+        return new ViperLocation(this.file, this.line, this.column)
     }
 }
 

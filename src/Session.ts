@@ -92,11 +92,11 @@ export class Session {
     public parseProgramDefinitions(pds: Array<any>): void {
         this.programDefinitions = pds.map(pd => {
             let file = pd.location.file
-            let loc = new ViperLocation(pd.location.start, file)
+            let loc = ViperLocation.from(pd.location.start, file)
             let scopeStart: ViperLocation | 'global' = 
-                (pd.scopeStart === 'global') ? 'global' : new ViperLocation(pd.scopeStart, file)
+                (pd.scopeStart === 'global') ? 'global' : ViperLocation.from(pd.scopeStart, file)
             let scopeEnd: ViperLocation | 'global' = 
-                (pd.scopeEnd === 'global') ? 'global' : new ViperLocation(pd.scopeEnd, file)
+                (pd.scopeEnd === 'global') ? 'global' : ViperLocation.from(pd.scopeEnd, file)
             
             if (pd.type.hasOwnProperty('viperType')) {
                 let typ = { name: pd.type.name, viperType: <Type> pd.type.viperType }

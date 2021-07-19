@@ -33,6 +33,25 @@ function getSelectValues(select: HTMLSelectElement): Array<string> {
     return result
 }
 
+function setSelectedElements(select: HTMLSelectElement, mode: 'all' | 'last'): void {
+    let options = select && select.options
+
+    for (let opt, i=0; i < options.length; i ++) {
+        opt = options[i]
+        if (mode === 'all' || mode === 'last' && i === options.length-1) {
+            opt.selected = true
+        }
+    }
+}   
+
+function removeAllOptions(select: HTMLSelectElement) {
+    // Based on https://stackoverflow.com/a/3364546/12163693
+
+    for (let i = select.options.length - 1; i >= 0; i--) {
+        select.remove(i)
+    }
+ }
+
 /** Sets up the debugger pane */ 
 function activate() {
     Logger.debug("Setting up debug pane...")
@@ -96,6 +115,7 @@ function setupMessageHandlers() {
     on('rawModelMessage', message => handleRawModelMessage(message))
     on('renderDotGraph', message => displayGraph(message))
     on('programStates', message => { initProgramStateSelect(message) })
+    on('verificationFailures', message => { initVerificationFailureSelect(message) })
     
     Logger.debug("\t...Done setting up message handlers.")
 }
@@ -141,6 +161,18 @@ function setupInputHandlers() {
         if (!disabled) {
             let selected = getSelectValues(progStateSelect)
             vscode.postMessage({ command: 'filterStates', state_names: selected })
+        }
+    }
+
+    let verFailureSelect = <HTMLSelectElement> domElem('select#verificationFailures')
+    verFailureSelect.onchange = function () {
+        const disabled = verFailureSelect.hasAttribute('disabled')
+        if (!disabled) {
+            let selected: Array<string> = getSelectValues(verFailureSelect)
+            if (selected.length !== 1) {
+                throw `there should be exacly one selected verification failure at any point in time (found ${selected})`
+            }
+            vscode.postMessage({ command: 'selectFailure', failure_id: selected[0] })
         }
     }
     
@@ -218,17 +250,41 @@ function initProgramStateSelect(message: any) {
     Logger.info(`Processing program states message...`)
 
     let progStateSelect = <HTMLSelectElement> domElem('select#programStates')
+    removeAllOptions(progStateSelect)
+
     let states: Array<{name: string, val: string}> = message.text
     states.forEach(state => {
         let item: HTMLOptionElement = document.createElement('option')
         item.value = state.name
         item.title = state.val
-        item.label = state.name
+        item.label = `State ${state.name}`
         progStateSelect.add(item)
     })
     progStateSelect.disabled = false
+    setSelectedElements(progStateSelect, 'all')
 
     Logger.info(`...Done processing program states message.`)
+}
+
+function initVerificationFailureSelect(message: any) {
+
+    Logger.info(`Processing verification failures message...`)
+
+    let verFailureSelect = <HTMLSelectElement> domElem('select#verificationFailures')
+    removeAllOptions(verFailureSelect)
+
+    let failures: Array<{line: number, column: number, text: string, id: string}> = message.text
+    failures.forEach(f => {
+        let item: HTMLOptionElement = document.createElement('option')
+        item.value = f.id
+        item.title = f.text
+        item.label = `Failure ${f.id} (Ln ${f.line}, Col ${f.column})`
+        verFailureSelect.add(item)
+    })
+    verFailureSelect.disabled = false
+    setSelectedElements(verFailureSelect, 'last')
+
+    Logger.info(`...Done processing verification failures message.`)
 }
 
 function displayGraph(message: any) {

@@ -5,6 +5,7 @@ import { GraphModel, State } from './Models'
 import { DotGraph } from './DotGraph'
 import { Logger } from './logger'
 import { Query } from './Query'
+import { Failure } from './ViperAST'
 
 export class DebuggerPanel {
 
@@ -27,6 +28,7 @@ export class DebuggerPanel {
     private panel: vscode.WebviewPanel
 
     constructor(readonly extensionPath: string,
+                readonly debugFailure: (fid: string) => any,
                 readonly queryHandler: (q: Query) => any,
                 readonly toggleGraphRankDir: () => any,
                 readonly toggleDotNodes: () => any) {
@@ -79,8 +81,20 @@ export class DebuggerPanel {
         })
     }
 
+    public listVerificationFailures(fs: Array<Failure>) {
+        this.panel.webview.postMessage({
+            type: 'verificationFailures',
+            text: fs
+        })
+    }
+
     private handleMessageFromPanel(message: any) {
         switch (message.command) { 
+            case 'selectFailure': 
+                let failure_id: string = message.failure_id
+                this.debugFailure(failure_id)
+                break
+
             case 'filterStates': 
                 let state_names: Array<string> = message.state_names
                 this.queryHandler(new Query(state_names))
