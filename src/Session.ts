@@ -1,6 +1,6 @@
 import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool, castToMapEntry } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -10,19 +10,12 @@ export interface SessionOpts {
     is_carbon_type_encoding_a: boolean
 }
 
+const wildcard = undefined
+
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
     public errorLocation: ViperLocation | undefined = undefined   // e.g. "30:22" meaning line 30, column 22
     public model: Model | undefined = undefined
-
-    public getEntryByName(entry_name: string): ModelEntry | undefined {
-        let res_maybe = Object.entries(this.model!).find(pair => pair[0] === entry_name)
-        if (res_maybe === undefined) {
-            return undefined
-        } else {
-            return res_maybe![1]
-        }
-    }
 
     private getEntriesViaRegExp(pattern: RegExp): Array<[string, ModelEntry]> {
         return Object.entries(this.model!).filter(pair => pattern.test(pair[0]))
@@ -312,15 +305,15 @@ export class Session {
                 nodes.forEach(pred_node => 
                     nodes.forEach(succ_node => {
                         let state_to_rels = this.collectReachInfo(rel_name, graph, pred_node, succ_node)
-                        let rels = this.states!.map(state => {
-                            let [is_reachable, status] = state_to_rels(state)
-                            if (is_reachable !== 'unspecified') {
-                                let r = (is_reachable === 'true') ? 'P' : '¬P'
-                                let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id, status)
-                                reach_rels.add(new_rel)
-                            }
-                        })
-                        return rels
+                        this.states!.forEach(state => 
+                            state.innervals.forEach(state_innerval => {
+                                let [is_reachable, status] = state_to_rels(state_innerval)
+                                if (is_reachable !== 'unspecified') {
+                                    let r = (is_reachable === 'true') ? 'P' : '¬P'
+                                    let new_rel = new LocalRelation(r, state, graph.id, pred_node.id, succ_node.id, status)
+                                    reach_rels.add(new_rel)
+                                }
+                            }))
                     }))))
 
         return Array.from(reach_rels)
@@ -340,14 +333,15 @@ export class Session {
         let field_relations = useful_fields.flatMap(fname => 
             nodes.flatMap(node => {
                 let state_to_rels = this.collectFieldValueInfo(node, fname)
-                let rels = this.states!.flatMap(state => {
-                    let [adj_node, status] = state_to_rels(state)
-                    if (adj_node === undefined) {
-                        return []
-                    } else {
-                        return [new Relation(fname, state, node.id, adj_node.id, status)]
-                    }
-                })
+                let rels = this.states!.flatMap(state => 
+                    state.innervals.flatMap(state_inerval => {
+                        let [adj_node, status] = state_to_rels(state.nameStr(), state_inerval)
+                        if (adj_node === undefined) {
+                            return []
+                        } else {
+                            return [new Relation(fname, state, node.id, adj_node.id, status)]
+                        }
+                    }))
                 node.fields.push(...rels)
                 return rels
             }))
@@ -557,7 +551,7 @@ export class Session {
     private log_reason(rel: Relation, reason: string): void {
         let pred = this.node_hash.get(rel.pred_id)!
         let succ = this.node_hash.get(rel.succ_id)!
-        let rel_str = `${rel.name}[ ${rel.state.val} ](${pred.val}, ${succ.val})`
+        let rel_str = `${rel.name}[ ${rel.state.valStr()} ](${pred.val}, ${succ.val})`
         Logger.info(`removing relation ${rel.repr()} = ${rel_str} because ${reason}`)
     }
 
@@ -618,7 +612,7 @@ export class Session {
 
         function relkey(rel: LocalRelation): string {
             // encodes all but the name and graph_id
-            return `${rel.state.val}_${rel.pred_id}_${rel.succ_id}`
+            return `${rel.state.valStr()}_${rel.pred_id}_${rel.succ_id}`
         }
             
         raw_reach_rels.forEach(rel => {
@@ -722,9 +716,9 @@ export class Session {
 
         // Filter the states
         let selected_states = new Set<string>(query.states)
-        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.name))
-        let filtered_states = this.graphModel!.states.filter(state => selected_states.has(state.name))
-        let filtered_reach = this.graphModel!.reach.filter(rel => selected_states.has(rel.state.name))
+        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.nameStr()))
+        let filtered_states = this.graphModel!.states.filter(state => selected_states.has(state.nameStr()))
+        let filtered_reach = this.graphModel!.reach.filter(rel => selected_states.has(rel.state.nameStr()))
         this.latestQuery = new GraphModel()
         Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
@@ -786,7 +780,7 @@ export class Session {
     }
 
     private collectReachInfo(rel_name: string, graph: Graph, 
-                             pred_node: GraphNode, succ_node: GraphNode): (state: State) => [SmtBool, Status] {
+                             pred_node: GraphNode, succ_node: GraphNode): (state_innerval: string) => [SmtBool, Status] {
 
         /** Step 1 -- decode the reachability function that depends on an edge graph */
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
@@ -808,19 +802,16 @@ export class Session {
             throw `model does not contain the expected relation '$$'`
         }
         let $$ = $$_maybe![1]
-        
-        // e.g. $$(h: Heap, g: Set[Ref]): Set[Edge]
-        let inner_fun = (stateval: string) => Session.appleEntry($$, [stateval, graph.val])
-        
 
         /** Step 3 -- combine the decoded functions */
-        return (state: State) => {
-            let [edge_graph, _] = inner_fun(state.val)
+        return (state_innerval: string) => {
+            // e.g. $$(h: Heap, g: Set[Ref]): Set[Edge]
+            let [edge_graph, _] = Session.appleEntry($$, [state_innerval, graph.val])
             return outer_fun(edge_graph)
         }
     }
 
-    private collectFieldValueInfo(node: Node, fname: string): (state: State) => [Node | undefined, Status] {
+    private collectFieldValueInfo(node: Node, fname: string): (state_name: string, state_innerval: string) => [Node | undefined, Status] {
         let rel_name = this.fieldLookupRelationName(fname)
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
         if (!rel_maybe) {
@@ -833,8 +824,9 @@ export class Session {
         let field_node_val = this.fieldNodeValue(fname)
         let simple_fun = this.partiallyApplyFieldMapEntry(<MapEntry> rel, node.val, field_node_val)
 
-        return (state: State) => {
-            let [succ_innerval, status] = simple_fun(state.val)
+        // We cannot pass just the state itself because consolidated states may have multiple inner values
+        return (state_name: string, state_innerval: string) => {
+            let [succ_innerval, status] = simple_fun(state_innerval)
             let field_type = this.viperTypes!.get(fname)
 
             // Check the value type. If the type in the model contradicts the field type, 
@@ -866,7 +858,7 @@ export class Session {
                     //  E.g.: {X.next, Y.next, Z.next} alias if {X, Y, Z} alias. 
                     // Note that we postpone the alias analysis until the next iteration of the core algorithm, 
                     //  at which stage all transitive nodes are going to be processed. 
-                    let alias_name = `${pred_alias_name}.${fname}[${state.name}]`
+                    let alias_name = `${pred_alias_name}.${fname}[${state_name}]`
                     let alias = this.mkNode(alias_name, succ_innerval, false, field_type)
                     this.transitive_nodes.set(alias.id, alias)
                     Logger.info(` ${alias.repr(true, true)}`)
@@ -1020,16 +1012,16 @@ export class Session {
             } else {
                 return entry.type === 'constant_entry' && (<ConstantEntry> entry).value.startsWith('$FVF<')
             }
-        }).map(pair => new State(pair[0], (<ConstantEntry> pair[1]).value))
+        }).map(pair => new State(new Array(), new Array((<ConstantEntry> pair[1]).value), new Array(pair[0])))
 
-        // Merge aliasing states
+        // Merge states with the same innerval (each state may have only one innerval at this point)
         let non_aliasing_states = new Map<string, State>()
         states.forEach(state => {
-            if (non_aliasing_states.has(state.val)) {
-                let non_aliasing_state = non_aliasing_states.get(state.val)!
-                non_aliasing_state.aliases.push(state.name)
+            if (non_aliasing_states.has(state.innervals[0])) {
+                let na_state = non_aliasing_states.get(state.innervals[0])!
+                na_state.aliases.push(...state.aliases)
             } else {
-                non_aliasing_states.set(state.val, state)
+                non_aliasing_states.set(state.innervals[0], state)
             }
         })
         
@@ -1046,17 +1038,69 @@ export class Session {
             Session.isStateLabel(def.name)).map(state_lbl_def => state_lbl_def.name)
     }
 
-    private remapStates(states: Array<State>): Array<State> {
-        let state_lbl_fun = Object.entries(this.model!).find(pair => pair[0] === '$state')
-        if (state_lbl_fun === undefined) {
-            return states
+    private static isMapEntryUnspecified(entry: MapEntry): boolean {
+        return entry.cases.length === 0 && entry.default.type === 'constant_entry' && 
+               getConstantEntryValue(entry.default) === '#unspecified'
+    }
+
+    private getEntryByName(name: string): ModelEntry | undefined {
+        
+        let matches = Object.entries(this.model!).filter(pair => pair[0].includes(name))
+        
+        if (matches.length === 0) {
+            return undefined
+        } else if (matches.length === 1) {
+            let match = matches.pop()!
+            return match[1]
         } else {
+            let exact_match = matches.find(pair => pair[0] === name)
+            if (exact_match !== undefined) {
+                return exact_match[1]
+            } else {
+                let renamed_matches = matches.filter(pair => {
+                    // Check if we have entries named e.g. 'snap_1'
+                    let m = pair[0].match(/^${name}_\d+$/) 
+                    return m !== null
+                })
+                if (renamed_matches.length === 0) {
+                    return undefined
+                } else {
+                    // Take the match with the least index
+                    return Array.from(renamed_matches.map(p => p[1])).sort().pop()
+                }
+            }
+        }
+    }
+
+    // Used as a fallback for remapStates in case state labels could not be identified
+    private static triviallyRemapStates(states: Array<State>): Array<State> {
+        states.forEach(state => state.names.push(state.aliases[0]))
+        return states
+    }
+
+    private remapStates(states: Array<State>): Array<State> {
+        let state_fun = '$state'
+        let heap_fun = '$heap'
+        let state_lbl_fun = this.getEntryByName(state_fun)
+        // let heap_snap_fun = this.getEntryByName(heap_fun)
+        if (state_lbl_fun === undefined) {
+            return Session.triviallyRemapStates(states)
+        } else {
+            // 0. Check that the state labels are modeled properly
+            let state_lbl_entry = castToMapEntry(state_lbl_fun)
+            // let heap_snap_entry = castToMapEntry(heap_snap_fun)
+
+            if (Session.isMapEntryUnspecified(state_lbl_entry)) {
+                Logger.warn(`could not map program states (interpretation of function '${state_fun}' or '${heap_fun}' is unspecified)`)
+                return Session.triviallyRemapStates(states)
+            }
+
             // 0. Find the defined state names, e.g. l0, l1, l2, ...
             let state_names = new Set(this.getStateNames())
 
             // 1. Find entries for each state name, 
             //    e.g. l0:{type:"constant_entry", value:"T@U!val!1"}
-            let state_name_entries = new Map<string, ConstantEntry>()
+            let state_name_map = new Map<string, Array<string>>()  // from label innerval to label names
             Object.entries(this.model!).forEach(pair => {
                 let entry_name = pair[0]
                 let entry = pair[1]
@@ -1064,30 +1108,67 @@ export class Session {
                     if (entry.type !== 'constant_entry') {
                         throw `expected constant_entry for '${entry_name}' in the model, but found ${entry.type}`
                     } else {
-                        state_name_entries.set(entry_name, <ConstantEntry> entry)
+                        let const_entry = <ConstantEntry> entry
+                        if (state_name_map.has(const_entry.value)) {
+                            let labels_for_val = state_name_map.get(const_entry.value)!
+                            labels_for_val.push(entry_name)
+                        } else {
+                            state_name_map.set(const_entry.value, new Array(entry_name))
+                        }
                     }
                 }
             })
 
             // 2. Map raw states to state names using the $state function
-            let state_lbl_entry = state_lbl_fun[1]
             let remapped_states = new Map<string, State>()
             states.forEach(raw_state => {
-                if (!remapped_states.has(raw_state.val)) {
-                    state_name_entries.forEach((state_entry, state_name) => {
-                        // The expected arguments of $state are: (1) heap/state, (2) current_footprint, (3) state_name
-                        //  we substitute these as follows:          raw_state       wildcard               state_name.val
-                        let [res, status] = Session.appleEntry(state_lbl_entry, [raw_state.val, undefined, state_entry.value])
-                        if (this.parseInnervalAsSmtBool(res) === 'true') {
-                            let proper_state = new State(state_name, raw_state.val, raw_state.aliases)
-                            remapped_states.set(raw_state.val, proper_state)
+                if (remapped_states.has(raw_state.innervals[0])) {
+                    throw `unexpected state alias with value ${raw_state.innervals[0]}`
+                }
+
+                // The expected arguments of $state are:                                 (1) heap/state,         (2) current_footprint
+                //  we substitute these as follows:                                          raw_state               wildcard         
+                let [expected_state_name_innerval, _] = Session.appleEntry(state_lbl_entry, [raw_state.innervals[0], wildcard])
+
+                state_name_map.forEach((state_names, state_name_innerval) => {
+                    if (expected_state_name_innerval === state_name_innerval) {
+                        let proper_state = new State(state_names.sort(), raw_state.innervals, raw_state.aliases.sort())
+                        if (remapped_states.has(raw_state.innervals[0])) {
+                            let old_state = remapped_states.get(raw_state.innervals[0])!
+                            Logger.warn(`consider removing duplicate labels for state with value ${raw_state.innervals[0]} (keeping ${old_state.nameStr()}; dropping ${state_names})`)
+                        } else {
+                            remapped_states.set(raw_state.innervals[0], proper_state)
                         }
-                    })
+                    }
+                })
+            })
+
+            // 3. Merge states that have labels with the same innterval
+            //   After this step, states may have multiple innervals for the first time. 
+            let na_states = new Map<string, State>()
+
+            let potentially_aliasing_states = Array.from(remapped_states.values())
+            potentially_aliasing_states.forEach(state => {
+                let key = state.nameStr()
+                if (na_states.has(key)) {
+                    let old_state = na_states.get(key)!
+                    old_state.aliases.push(...state.aliases)
+                    old_state.aliases.sort()
+                    if (old_state.valStr() === state.valStr()) {
+                        throw `different states' values should not be equal before state consolidation (${old_state}, ${state})`
+                    }
+                    // We assume that these states are effectiely equal since the labels to which they correspond are equal.
+                    state.innervals.forEach(dropped_innerval => 
+                        Logger.warn(`ignoring states with innerval ${dropped_innerval} as they are equal to ${old_state}`))
+                    // old_state.innervals.push(...state.innervals)
+                    // old_state.innervals.sort()
+                } else {
+                    na_states.set(key, state)
                 }
             })
 
-            // 3. Return sorted, named states
-            return Array.from(remapped_states.values()).sort((a: State, b: State) => a.name.localeCompare(b.name))
+            // 4. Return sorted, named states
+            return Array.from(na_states.values()).sort((a: State, b: State) => a.nameStr().localeCompare(b.nameStr()))
         }
     }
 

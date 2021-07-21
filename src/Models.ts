@@ -2,7 +2,9 @@
 export type SmtBool = 'unspecified' | 'true' | 'false'
 
 export function castToSmtBool(val: string): SmtBool {
-    if (['#unspecified', 'true', 'false'].includes(val)) {
+    if (val === '#unspecified') {
+        return 'unspecified'
+    } else if (['true', 'false'].includes(val)) {
         return <SmtBool> val
     } else {
         throw `cannot cast ${val} to SmtBool`
@@ -10,11 +12,11 @@ export function castToSmtBool(val: string): SmtBool {
 }
 
 export interface ModelEntry {
-    type: string
+    type: 'constant_entry' | 'application_entry' | 'map_entry'
 }
 
 export class ConstantEntry implements ModelEntry {
-    type = 'constant_entry'
+    type: 'constant_entry' | 'application_entry' | 'map_entry' = 'constant_entry'
     value: string
     constructor(readonly v: string) {
         this.value = v
@@ -34,7 +36,7 @@ export interface FunctionValue {
 }
 
 export class ApplicationEntry implements ModelEntry {
-    type = 'application_entry'
+    type: 'constant_entry' | 'application_entry' | 'map_entry' = 'application_entry'
     constructor(readonly value: FunctionValue) {}
 }
 
@@ -44,12 +46,20 @@ export interface ModelCase {
 }
 
 export class MapEntry implements ModelEntry {
-    type = 'map_entry'
+    type: 'constant_entry' | 'application_entry' | 'map_entry' = 'map_entry'
     cases: Array<ModelCase>  
     default: ModelEntry
     constructor(readonly cs: Array<ModelCase>, df: ModelEntry) {
         this.cases = cs
         this.default = df
+    }
+}
+
+export function castToMapEntry(entry: ModelEntry): MapEntry {
+    if (entry.type === 'map_entry') {
+        return <MapEntry> entry
+    } else {
+        throw `cannot interpret '${entry}' as map entry`
     }
 }
 
@@ -250,7 +260,7 @@ export class Relation {
                 readonly succ_id: number, 
                 readonly status: Status = 'unknown') {
     
-        this._ = `${name}[ ${state.name} ](N${pred_id}, N${succ_id})`
+        this._ = `${name}[ ${state.nameStr()} ](N${pred_id}, N${succ_id})`
     }
 
     public hash(): string {
@@ -271,14 +281,39 @@ export class LocalRelation extends Relation {
                 readonly status: Status = 'unknown') {
     
         super(name, state, pred_id, succ_id, status)
-        this._ = `${name}[ ${state.name} ](G${graph_id}, N${pred_id}, N${succ_id})`
+        this._ = `${name}[ ${state.nameStr()} ](G${graph_id}, N${pred_id}, N${succ_id})`
     }
 }
 
 export class State { 
-    constructor(readonly name: string,
-                readonly val: string, 
-                readonly aliases: Array<string> = new Array(name)) {}
+
+    public val: string = this.valStr()
+    public name: string = this.nameStr()
+
+    constructor(readonly names: Array<string>,  // e.g. l0, l1, ...
+                readonly innervals: Array<string>, 
+                readonly aliases: Array<string>) { // e.g. Heap@1, PostHeap@@2, etc.
+        
+        Object.defineProperty(this, 'name', {
+            get: function() {
+                return this.nameStr()
+            }
+        })
+
+        Object.defineProperty(this, 'val', {
+            get: function() {
+                return this.valStr()
+            }
+        })
+    }
+
+    public nameStr(): string {
+        return this.names.join('/')
+    }
+
+    public valStr(): string {
+        return this.innervals.join('=')
+    }
 }
 
 export class GraphModel {

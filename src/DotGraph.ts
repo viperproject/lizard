@@ -8,7 +8,7 @@ export interface RenderOpts {
 
 type ReachKey = string
 function ReachKey(state: State, graph_id: number, pred_id: number, succ_id: number): string {
-    return `${state.name}|${graph_id}|${pred_id}|${succ_id}`
+    return `${state.nameStr()}|${graph_id}|${pred_id}|${succ_id}`
 }
 
 export class DotGraph {
@@ -128,10 +128,10 @@ export class DotGraph {
 
     private nodeFields(node: GraphNode, only_scalar: boolean = false): string {
         return node.fields.filter(field => 
-            this.__state_map.has(field.state.name))
+            this.__state_map.has(field.state.nameStr()))
         .flatMap(field => {  
 
-            let state = (this.__state_map.size > 1) ? `[${field.state.name}]` : ``
+            let state = (this.__state_map.size > 1) ? `[${field.state.nameStr()}]` : ``
             let succ = this.getGraphNodeById(field.succ_id)
 
             let val: string
@@ -152,7 +152,7 @@ export class DotGraph {
 
             let status = field.status === 'default' ? `*` : ``
 
-            return [`<TR><TD align="text" BGCOLOR="#ffffff" PORT="${field.name}@${field.state.name}">` + 
+            return [`<TR><TD align="text" BGCOLOR="#ffffff" PORT="${field.name}@${field.state.nameStr()}">` + 
                 `${status}${field.name}${state}` +
                 (this.isFieldValueNull(field) ? ` = null` : (!this.isFieldRef(field) ? ` = ${val}` : ``)) +
                 `<BR ALIGN="left" /></TD></TR>`]
@@ -218,7 +218,7 @@ export class DotGraph {
     }
 
     private renderStateLabel(state: State): string {
-        return (this.__state_map.size > 1) ? `<SUB><FONT POINT-SIZE="10">${state.name}</FONT></SUB>` : ``
+        return (this.__state_map.size > 1) ? `<SUB><FONT POINT-SIZE="10">${state.nameStr()}</FONT></SUB>` : ``
     }
 
     private renderFieldRelation(field: Relation): string {
@@ -236,9 +236,9 @@ export class DotGraph {
             return `N${pred.id} -> N${succ.id} [label=<${field.name}${state_lbl}> ${status}]`
         } else if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
-            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD":e [${status}];`
+            return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD":e [${status}];`
         } else {
-            return `N${pred.id}:"${field.name}@${field.state.name}":e -> N${succ.id}:"$HEAD" [${status}];`
+            return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD" [${status}];`
         }
     }
 
@@ -339,7 +339,7 @@ export class DotGraph {
                 readonly opts: RenderOpts) {
         
         // hash nodes by their ids and states by their names
-        model.states.forEach(state => this.__state_map.set(state.name, state))
+        model.states.forEach(state => this.__state_map.set(state.nameStr(), state))
         model.graphs.forEach(graph => this.__graph_map.set(graph.id, graph))
         model.graphNodes.forEach(node => this.__graph_node_map.set(node.id, node))
         model.scalarNodes.forEach(node => this.__scalar_node_map.set(node.id, node))
