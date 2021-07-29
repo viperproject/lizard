@@ -50,7 +50,8 @@ export class Session {
 
     private mkNode(name: string, innerval: string, is_local: boolean, 
                    type: ViperType | undefined = undefined, 
-                   proto: Array<string> | undefined = undefined): Node {
+                   proto: Array<string> | undefined = undefined, 
+                   states: Array<State> = []): Node {
 
         // Special case the null node
         if (name === this.nullNodeName()) {
@@ -70,11 +71,11 @@ export class Session {
             }
         }
         if (type.typename === 'Set[Ref]') {
-            return new Graph([name], this.freshNodeId(), innerval, is_local, proto)
+            return new Graph([name], this.freshNodeId(), innerval, is_local, proto, states)
         } else if (type && type.typename === 'Ref') {
-            return new GraphNode([name], false, this.freshNodeId(), innerval, is_local, proto)
+            return new GraphNode([name], false, this.freshNodeId(), innerval, is_local, proto, states)
         } else {
-            return new Node([name], type, this.freshNodeId(), innerval, is_local, proto)
+            return new Node([name], type, this.freshNodeId(), innerval, is_local, proto, states)
         }
     }
 
@@ -216,7 +217,7 @@ export class Session {
 
     private static collectEquivClasses(nodes: Array<Node>, ec: EquivClasses): void {
         nodes.forEach(node => {
-            let key: [string, ViperType] = [node.val, node.type]
+            let key: [string, Array<State>, ViperType] = [node.val, node.states, node.type]
             if (ec.has(...key)) {
                 ec.get(...key)!.push(node)
             } else {
@@ -225,12 +226,73 @@ export class Session {
         })
     }
 
-    private collectInitialGraphsAndNodes(): Array<Node> {
+    static localVarKey(stateLbl: string, varName: string): string {
+        return `${stateLbl}_${varName}`
+    }
+    // Maps labels/names to values (see localVarKey)
+    private collectLocalStoreVars(): Array<Node> | undefined {
+        let res = new Array<Node>()
+
+        // Entry example: "$local$a$2" -> 22
+        let localEntris = Object.entries(this.model!).filter(pair => pair[0].startsWith('$local'))
+
+        if (localEntris.length === 0) {
+            Logger.warn(`Did not find local variable instrumentation; proceeding with a best-effort approach`)
+            return undefined 
+        }
+
+        // Map states by labels 
+        let states = new Map<string, Array<State>>()
+        this.states!.forEach(state => {
+            state.names.forEach(label => {
+                if (states.has(label)) {
+                    states.get(label)!.push(state)
+                } else {
+                    states.set(label, new Array(state))
+                }
+            })
+        })
+
+        localEntris.forEach(pair => {
+            let name = pair[0]
+            let entry = pair[1]
+            let m = name.match(/^\$local\$(.*)\$(\d+)$/)
+            if (m === null || m === undefined) {
+                throw `cannot parse local store instumentation emtry name '${name}' (expected e.g. '$local$a$2')`
+            }
+            let varName = m[1]
+            let stateLabel = m[2]
+            let val = Session.serializeEntryValue(entry)
+            
+            // Add corresponding atom to model
+            let type = this.viperTypes!.get(varName)
+            let lblName = `l${stateLabel}`
+            let statesForThisVar = states.get(lblName)
+            if (statesForThisVar === undefined) {
+                Logger.error(`cannot find states for label '${lblName}'`)
+                statesForThisVar = []
+            }
+            let atom = this.mkNode(varName, val, true, type, [varName], statesForThisVar)
+            this.atoms!.push(atom)
+            res.push(atom)
+        })
+
+        return res
+    }
+
+    private collectInitialGraphsAndNodes(best_effort: boolean): Array<Node> {
         
-        let names = this.getDefinitionNames('Local')
-                    .concat(this.getDefinitionNames('Argument'))
+        let names: Array<string> 
+        if (best_effort) {
+            names = this.getDefinitionNames('Argument')
+                    .concat(this.getDefinitionNames('Local'))
                     .concat(this.getDefinitionNames('Return'))
                     .concat(this.nullNodeName())
+        } else {
+            // Normal mode, in case the program was properly instrumented
+            names = this.getDefinitionNames('Argument')
+                    .concat(this.nullNodeName())
+        }
 
         let atoms = names.flatMap(proto => 
             this.atoms!.filter(atom => {
@@ -265,7 +327,7 @@ export class Session {
         nodes.forEach(node => {
             let node_name = node.aliases[0]
 
-            let key = EquivClasses.key(node.val, node.type)
+            let key = EquivClasses.key(node.val, node.states, node.type)
             if (this.nonAliasingNodesMap.has(key)) {
                 // We already have a representative for this node inner value+type
                 let na_node = this.nonAliasingNodesMap.get(key)!
@@ -526,20 +588,21 @@ export class Session {
         let tc = new Map<State, Map<string, Relation>>()
         
         // Hash heap edges by state
-        let heap_edges_in_state = new Map<State, Array<Relation>>()
+        let heap_edges_in_state = new Map<string, Array<Relation>>()
+        let states = new Array<State>()
         heap_edges.forEach(edge => {
-            let entry = heap_edges_in_state.get(edge.state)
+            let entry = heap_edges_in_state.get(edge.state.hash())
             if (entry === undefined) {
-                heap_edges_in_state.set(edge.state, new Array(edge))
+                heap_edges_in_state.set(edge.state.hash(), new Array(edge))
+                states.push(edge.state)
             } else {
                 entry.push(edge)
             }
         })
 
         // Process each state
-        let states = new Set(heap_edges_in_state.keys())
         states.forEach(state => {
-            let tc_for_state = Session.transitiveClosure(state, heap_edges_in_state.get(state)!)
+            let tc_for_state = Session.transitiveClosure(state, heap_edges_in_state.get(state.hash())!)
             let rel_map = new Map<string, Relation>()
             tc_for_state.forEach(rel => rel_map.set(rel.hash(), rel))
             tc.set(state, rel_map)
@@ -593,7 +656,7 @@ export class Session {
             } else {
                 let key = (new Relation('TC', rel.state, rel.pred_id, rel.succ_id)).hash()
                 let tc_rel = entry.get(key)
-                if (!tc_rel) {
+                if (tc_rel === undefined) {
                     // In case there is no transitive heap relation for this pred and succ, keep reachability information from the model
                     return true
                 } else {
@@ -679,8 +742,15 @@ export class Session {
 
     public produceGraphModel(): GraphModel {
         // 0. Collect initial nodes
-        let starting_atoms = this.collectInitialGraphsAndNodes()
-
+        let local_node_versions = this.collectLocalStoreVars()
+        let starting_atoms: Array<Node>
+        if (local_node_versions === undefined) {
+            starting_atoms = this.collectInitialGraphsAndNodes(true)
+        } else {
+            starting_atoms = this.collectInitialGraphsAndNodes(false)
+            starting_atoms.push(...local_node_versions)
+        }
+        
         // 1. Process and Saturate! 
         this.produceGraphModelRec(starting_atoms)
         
@@ -844,7 +914,7 @@ export class Session {
                 return [undefined, status]
             }
             
-            let key = EquivClasses.key(succ_innerval, field_type)
+            let key = EquivClasses.key(succ_innerval, node.states, field_type)
             let succ: Node
             if (this.nonAliasingNodesMap.has(key)) {
                 // succ already has a representative node
@@ -887,6 +957,14 @@ export class Session {
         return succ_innerval === 'true' || succ_innerval === 'false'
     }
 
+    private isValueOfUninterpretedType(innerval: string): boolean {
+        let m = innerval.match(/^.*val!\d+$/)  // e.g. "T@U!val!1"
+        if (m !== null && m !== undefined) {
+            return true
+        } else {
+            return false
+        }
+    }
 
     /** Example application entry in function model: 
       *
@@ -1003,7 +1081,7 @@ export class Session {
     }
 
     private collectStates(): Array<State> {
-        // Collect states as inner values of the SMT model
+        // A. Collect heap states as inner values of the SMT model
         let states = Object.entries(this.model!).filter(pair => {
             let entry_name = pair[0]
             let entry = pair[1]
@@ -1014,18 +1092,21 @@ export class Session {
             }
         }).map(pair => new State(new Array(), new Array((<ConstantEntry> pair[1]).value), new Array(pair[0])))
 
-        // Merge states with the same innerval (each state may have only one innerval at this point)
-        let non_aliasing_states = new Map<string, State>()
-        states.forEach(state => {
-            if (non_aliasing_states.has(state.innervals[0])) {
-                let na_state = non_aliasing_states.get(state.innervals[0])!
-                na_state.aliases.push(...state.aliases)
-            } else {
-                non_aliasing_states.set(state.innervals[0], state)
-            }
-        })
+        // // C. Merge states with the same innerval (each state may have only one innerval at this point)
+        // let non_aliasing_states = new Map<string, State>()
+        // states.forEach(state => {
+        //     let key1 = labelToHash.get(state.names[0])
+        //     let key = `${state.innervals[0]}_${key1}`
+        //     if (non_aliasing_states.has(key)) {
+        //         let na_state = non_aliasing_states.get(key)!
+        //         na_state.aliases.push(...state.aliases)
+        //     } else {
+        //         non_aliasing_states.set(key, state)
+        //     }
+        // })
         
-        return Array.from(non_aliasing_states.values())
+        // return Array.from(non_aliasing_states.values())
+        return states
     }
 
     private static isStateLabel(idn: string): boolean {
@@ -1094,13 +1175,47 @@ export class Session {
                 Logger.warn(`could not map program states (interpretation of function '${state_fun}' or '${heap_fun}' is unspecified)`)
                 return Session.triviallyRemapStates(states)
             }
+            
+            // 0.5. Collect local store versions (TODO: this is similar to collectLocalStoreVars -- share the code?)
+            let labelVarVal = new Map<string, Map<string, string>>()  // From labels to vars to values
+            let localEntris = Object.entries(this.model!).filter(pair => pair[0].startsWith('$local'))
+            localEntris.forEach(pair => {
+                let name = pair[0]
+                let entry = pair[1]
+                let m = name.match(/^\$local\$(.*)\$(\d+)$/)
+                if (m === null || m === undefined) {
+                    throw `cannot parse local store instumentation emtry name '${name}' (expected e.g. '$local$a$2')`
+                }
+                let varName = m[1]
+                let stateLabel = m[2]
+                let labelName = `l${stateLabel}`
+                let val = Session.serializeEntryValue(entry)
+                
+                if (labelVarVal.has(labelName)) {
+                    let varsToVals = labelVarVal.get(labelName)!
+                    if (varsToVals.has(varName)) {
+                        throw `unexpected duplicate in local state instrumentation: label='${labelName}', var='${varName}', val='${val}'`
+                    } else {
+                        varsToVals.set(varName, val)
+                    }
+                } else {
+                    let varsToVals = new Map()
+                    varsToVals.set(varName, val)
+                    labelVarVal.set(labelName, varsToVals)
+                }
+            })
+            let labelToHash = new Map<string, string>()  // label hashes to labels
+            labelVarVal.forEach((varToVal, label) => {
+                let key = Array.from(varToVal.entries()).map(pair => `${pair[0]}_${pair[1]}`).sort().join(';')
+                labelToHash.set(label, key)
+            })
 
-            // 0. Find the defined state names, e.g. l0, l1, l2, ...
+            // 1    Find the defined state names, e.g. l0, l1, l2, ...
+            const keySep = '///'
             let state_names = new Set(this.getStateNames())
-
-            // 1. Find entries for each state name, 
+            // 1.5  Find entries for each state name, 
             //    e.g. l0:{type:"constant_entry", value:"T@U!val!1"}
-            let state_name_map = new Map<string, Array<string>>()  // from label innerval to label names
+            let labels = new Map<string, Array<string>>()  // from label innerval/localHash to label names
             Object.entries(this.model!).forEach(pair => {
                 let entry_name = pair[0]
                 let entry = pair[1]
@@ -1109,18 +1224,20 @@ export class Session {
                         throw `expected constant_entry for '${entry_name}' in the model, but found ${entry.type}`
                     } else {
                         let const_entry = <ConstantEntry> entry
-                        if (state_name_map.has(const_entry.value)) {
-                            let labels_for_val = state_name_map.get(const_entry.value)!
+                        let key1 = labelToHash.get(entry_name)  // e.g. labelToHash('l1') === 'a_42;b_25'
+                        let key = `${const_entry.value}${keySep}${key1}`
+                        if (labels.has(key)) {
+                            let labels_for_val = labels.get(key)!
                             labels_for_val.push(entry_name)
                         } else {
-                            state_name_map.set(const_entry.value, new Array(entry_name))
+                            labels.set(key, new Array(entry_name))
                         }
                     }
                 }
             })
 
             // 2. Map raw states to state names using the $state function
-            let remapped_states = new Map<string, State>()
+            let remapped_states = new Map<string, State>()  // maps heap innervals/ local store hashes to states
             states.forEach(raw_state => {
                 if (remapped_states.has(raw_state.innervals[0])) {
                     throw `unexpected state alias with value ${raw_state.innervals[0]}`
@@ -1130,24 +1247,42 @@ export class Session {
                 //  we substitute these as follows:                                          raw_state               wildcard         
                 let [expected_state_name_innerval, _] = Session.appleEntry(state_lbl_entry, [raw_state.innervals[0], wildcard])
 
-                state_name_map.forEach((state_names, state_name_innerval) => {
+                labels.forEach((state_names, key) => {
+                    let k = key.split(keySep)
+                    let state_name_innerval = k[0]
+                    let local_store_hash = k[1]
                     if (expected_state_name_innerval === state_name_innerval) {
-                        let proper_state = new State(state_names.sort(), raw_state.innervals, raw_state.aliases.sort())
-                        if (remapped_states.has(raw_state.innervals[0])) {
-                            let old_state = remapped_states.get(raw_state.innervals[0])!
-                            Logger.warn(`consider removing duplicate labels for state with value ${raw_state.innervals[0]} (keeping ${old_state.nameStr()}; dropping ${state_names})`)
+                        // Found a correspondence between label and raw state
+                        let proper_state = new State(state_names.sort(), raw_state.innervals, raw_state.aliases.sort(), local_store_hash)
+                        let remapKey = `${raw_state.innervals[0]}${keySep}${local_store_hash}`
+                        if (remapped_states.has(remapKey)) {
+                            let old_state = remapped_states.get(remapKey)!
+                            Logger.warn(`consider removing duplicate labels for state with value ${raw_state.innervals[0]} and local store hash ${local_store_hash} (keeping ${old_state.nameStr()}; dropping ${state_names})`)
                         } else {
-                            remapped_states.set(raw_state.innervals[0], proper_state)
+                            remapped_states.set(remapKey, proper_state)
                         }
                     }
                 })
+            })
+
+            // 2.75. Merge states with the same innerval/localHash (each state may have only one innerval at this point)
+            let non_aliasing_states = new Map<string, State>()
+            Array.from(remapped_states.values()).forEach(state => {
+                let key1 = state.localStoreHash
+                let key = `${state.innervals[0]}_${key1}`
+                if (non_aliasing_states.has(key)) {
+                    let na_state = non_aliasing_states.get(key)!
+                    na_state.aliases.push(...state.aliases)
+                } else {
+                    non_aliasing_states.set(key, state)
+                }
             })
 
             // 3. Merge states that have labels with the same innterval
             //   After this step, states may have multiple innervals for the first time. 
             let na_states = new Map<string, State>()
 
-            let potentially_aliasing_states = Array.from(remapped_states.values())
+            let potentially_aliasing_states = Array.from(non_aliasing_states.values())
             potentially_aliasing_states.forEach(state => {
                 let key = state.nameStr()
                 if (na_states.has(key)) {
@@ -1159,7 +1294,7 @@ export class Session {
                     }
                     // We assume that these states are effectiely equal since the labels to which they correspond are equal.
                     state.innervals.forEach(dropped_innerval => 
-                        Logger.warn(`ignoring states with innerval ${dropped_innerval} as they are equal to ${old_state}`))
+                        Logger.warn(`ignoring states with innerval ${dropped_innerval} as they are equal to ${old_state.nameStr()}`))
                     // old_state.innervals.push(...state.innervals)
                     // old_state.innervals.sort()
                 } else {
@@ -1232,20 +1367,31 @@ export class Session {
             let state = getConstantEntryValue(state_entry)
 
             // Check if this case matches the provided partial arguments
+
             let first_entry = map_case.args[object_index]
+            if (first_entry.type !== 'constant_entry' || !this.isValueOfUninterpretedType(getConstantEntryValue(first_entry))) {
+                // A heuristic for avoiding type-insensitive model entries (which may occur in e.g. Boogie's [3] function)
+                Logger.warn(`skipping model entry with mixed types`)
+                return
+            }
             let first = getConstantEntryValue(first_entry)
         
             if (field) {
                 // this is Carbon
                 let second_entry = map_case.args[field_index!]
+                if (second_entry.type !== 'constant_entry' || !this.isValueOfUninterpretedType(getConstantEntryValue(second_entry))) {
+                    // A heuristic for avoiding type-insensitive model entries (which may occur in e.g. Boogie's [3] function)
+                    Logger.warn(`skipping model entry with mixed types`)
+                    return
+                }
                 let second = getConstantEntryValue(second_entry)
                 if (first === reciever && second === field) {
-                    let val = getConstantEntryValue(map_case.value)
+                    let val = Session.serializeEntryValue(map_case.value)
                     res_map.set(state, val)
                 }
             } else {
                 if (first === reciever) {
-                    let val = getConstantEntryValue(map_case.value)
+                    let val = Session.serializeEntryValue(map_case.value)
                     res_map.set(state, val)
                 }
             }
@@ -1364,15 +1510,19 @@ export class Session {
     private static innerNameParser(inner_name: string): 
         { proto: string, suffix?: string, index?: number } {
 
-        let m2 = inner_name.match(/(.*)@(.*)@(\d+)/)
+        let m3 = inner_name.match(/^(.*)_(\d+)@.*@(\d+)$/)  // e.g. a_2@@3
+        if (m3 !== null) {
+            return { proto: m3[1], suffix: m3[2], index: parseInt(m3[3]) }
+        }
+        let m2 = inner_name.match(/^(.*)@(.*)@(\d+)$/)
         if (m2 !== null) {
             return { proto: m2[1], suffix: m2[2], index: parseInt(m2[3]) }
         }
-        let m1 = inner_name.match(/(.*)@(\d+)/)
+        let m1 = inner_name.match(/^(.*)@(\d+)$/)
         if (m1 !== null) {
             return { proto: m1[1], index: parseInt(m1[2]) }
         }
-        let m0 = inner_name.match(/(.*)_(\d+)/)
+        let m0 = inner_name.match(/^(.*)_(\d+)$/)
         if (m0 !== null) {
             return { proto: m0[1], index: parseInt(m0[2]) }
         }

@@ -131,7 +131,10 @@ export class DotGraph {
             this.__state_map.has(field.state.nameStr()))
         .flatMap(field => {  
 
-            let state = (this.__state_map.size > 1) ? `[${field.state.nameStr()}]` : ``
+            let state = (this.__state_map.size > 1) 
+                ? this.renderStateLabel(field.state)
+                : ``
+
             let succ = this.getGraphNodeById(field.succ_id)
 
             let val: string
@@ -194,9 +197,10 @@ export class DotGraph {
 
     private renderCalleeGraph(): string {
         let callee = this.__callee!
+        let state = this.renderStateLabel(callee.states)
         return `subgraph cluster_${callee.id} {\n` + 
                `\t\t${this.clusterPreamble(DotGraph.CALLEE_COLOR, DotGraph.CALLEE_BGCOLOR)}\n` + 
-               `\t\tlabel="${callee.repr(true, true)} = ${this.renderNodeValue(callee)}";\n` + 
+               `\t\tlabel="Callee${state} = ${this.renderNodeValue(callee)}";\n` + 
                `\t${callee.mapNodes(node => this.renderNode(node, callee)).join('\n\t')}\n\t}`
     }
 
@@ -205,20 +209,34 @@ export class DotGraph {
         let client = this.__client!
         let callee = this.__callee!
 
-        let callee_str = this.renderCalleeGraph()
+        let callee_str = ``
+        let frame_str = ``
+        if (callee !== undefined) {
+            callee_str = this.renderCalleeGraph()
+            let callee_nodes = callee.getNodesSet()
+            let frame_nodes = client.filterNodes(node => !callee_nodes.has(node))
+            frame_str = frame_nodes.map(node => this.renderNode(node, client)).join('\n\t')
+        } else {
+            frame_str = client.getNodesArray().map(node => this.renderNode(node, client)).join('\n\t')   
+        }
 
-        let callee_nodes = callee.getNodesSet()
-        let frame_nodes = client.filterNodes(node => !callee_nodes.has(node))
+        let state = this.renderStateLabel(client.states)
 
         return `subgraph cluster_${client.id} {\n` + 
                 `\t\t${this.clusterPreamble(DotGraph.CLIENT_COLOR, DotGraph.CLIENT_BGCOLOR)}\n` + 
-                `\t\tlabel="${client.repr(true, true)} = ${this.renderNodeValue(client)}";\n` + 
+                `\t\tlabel="Client${state} = ${this.renderNodeValue(client)}";\n` + 
                 `\t${callee_str}\n` + 
-                `\t${frame_nodes.map(node => this.renderNode(node, client)).join('\n\t')}\n\t}`
+                `\t${frame_str}\n\t}`
     }
 
-    private renderStateLabel(state: State): string {
-        return (this.__state_map.size > 1) ? `<SUB><FONT POINT-SIZE="10">${state.nameStr()}</FONT></SUB>` : ``
+    private renderStateLabel(state: State | Array<State>): string {
+        if (this.__state_map.size === 0 || Array.isArray(state) && state.length === 0) {
+            return ``
+        } else if (Array.isArray(state)) {
+            return `<SUB><FONT POINT-SIZE="10">${state.map(s => s.nameStr()).join('/')}</FONT></SUB> `
+        } else {
+            return `<SUB><FONT POINT-SIZE="10">${state.nameStr()}</FONT></SUB> `
+        }
     }
 
     private renderFieldRelation(field: Relation): string {
@@ -233,7 +251,8 @@ export class DotGraph {
         let status = field.status === 'default' ? `labeldistance=0 taillabel=<*>` : ``
         if (this.opts.dotnodes) {
             let state_lbl = this.renderStateLabel(field.state)
-            return `N${pred.id} -> N${succ.id} [label=<${field.name}${state_lbl}> ${status}]`
+            let label = `<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0"><TR><TD>${field.name}${state_lbl}</TD></TR></TABLE>`
+            return `N${pred.id} -> N${succ.id} [label=<${label}> ${status}]`
         } else if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
             return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD":e [${status}];`
@@ -280,12 +299,14 @@ export class DotGraph {
     private storeNodes(nodes: Array<Node>): string {
         return nodes.map(node => {
             let repr: string
+            let withoutStateMarkers = (this.__state_map.size === 1)
+            let extraSpace = withoutStateMarkers ? `` : ` `
             if (isRef(node.type)) {
                 // this is a graph node
-                repr = node.repr(true, true)
+                repr = node.repr(true, true, withoutStateMarkers, true)
             } else {
                 // not a graph node
-                repr = `${node.repr(true, true)} = ${this.renderNodeValue(node)}`
+                repr = `${node.repr(true, true, withoutStateMarkers, true)}${extraSpace} = ${this.renderNodeValue(node)}`
             }
 
             return `<TR><TD align="text" PORT="Local_N${node.id}">` + 
@@ -304,8 +325,9 @@ export class DotGraph {
 
     private renderRefs(graph_nodes: Array<GraphNode>): string {
         let constraint = this.opts.rankdir_lr ? `` : `constraint=false `
+        let port = this.opts.dotnodes ? `` : `:"$HEAD"`
         return graph_nodes.map(ref_node => 
-            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}:"$HEAD" [${constraint}style=dotted];`).join('\n\t')
+            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}${port} [${constraint}style=dotted];`).join('\n\t')
     }
 
     private renderReachRelations(rels: Array<LocalRelation>): string {
@@ -360,7 +382,7 @@ export class DotGraph {
             footprint_ids.add(this.__client.id)
             footprint_ids.add(this.__callee.id)
         } else if (this.__client !== undefined) {
-            graphs = this.renderGraph(this.__client)
+            graphs = this.renderClientGraph()
             footprint_ids.add(this.__client.id)
         } else if (this.__callee !== undefined) {
             graphs = this.renderGraph(this.__callee)
@@ -388,7 +410,17 @@ export class DotGraph {
         // render the local store
         let local_refs = model.graphNodes.filter(n => n.isLocal)
         let local_scalar_nodes = model.scalarNodes.filter(n => n.isLocal)
-        let store = this.renderLocalStore(local_scalar_nodes.concat(local_refs))
+        let nodes_worth_rendering = local_scalar_nodes.concat(local_refs).filter(node => {
+            if (node.states.length === 0) {
+                // This noe belongs to all states
+                return true
+            } else {
+                // This node is alive in a subset of all program states
+                let activeStates = node.states.filter(state => this.__state_map.has(state.nameStr()))
+                return activeStates.length > 0
+            }
+        })
+        let store = this.renderLocalStore(nodes_worth_rendering)
         let refs = this.renderRefs(local_refs.filter(n => !n.isNull))
         
         this.__buffer = `digraph g {\n` + 

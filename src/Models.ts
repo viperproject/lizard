@@ -159,14 +159,24 @@ export class Node {
     /** This dynamic field enables JSONFormatter to pretty pront the node. */
     private _: string 
 
-    public repr(withoutType=false, withoutValue=false): string {
+    public repr(withoutType=false, withoutValue=false, withoutState=false, html=false): string {
         let readable_name = Array.isArray(this.aliases) ? `${this.aliases.join(' = ')}` : this.aliases
         let val = withoutValue ? `` : ` = ${this.val}`
         
+        let state = this.states.map(s => s.nameStr()).join('/')
+        if (state !== '' && html) {
+            state = `<SUB><FONT POINT-SIZE="10">${state}</FONT></SUB>`
+        } else if (state !== '') {
+            state = `@${state}`
+        }
+        if (withoutState) {
+            state = ``
+        }
+
         if (!withoutType && this.type) {
-            return `${readable_name}: ${this.type.typename}${val}`
+            return `${readable_name}${state}: ${this.type.typename}${val}`
         } else {
-            return `${readable_name}${val}`
+            return `${readable_name}${state}${val}`
         }
     }
     constructor(public aliases: Array<string>,          // e.g. "X@7@12" or ["$FOOTPRINT@0@12", "$FOOTPRINT@1@12"]
@@ -174,7 +184,8 @@ export class Node {
                 readonly id: number,                    // 0, 1, 2, ...
                 public val: string,                     // e.g. "$Ref!val!0"
                 readonly isLocal: boolean,             // whether this ndoe is refer to from the program store
-                public proto: Array<string> = []) { // e.g. "X"
+                public proto: Array<string>, 
+                public states: Array<State> = []) { // e.g. "X"
     
         this._ = this.repr()
         // A node's pretty representation is computed dynamically since the fields are mutable. 
@@ -194,9 +205,10 @@ export class GraphNode extends Node {
                 readonly id: number,
                 public val: string,
                 readonly isLocal: boolean,
-                public proto: Array<string> = []) {
+                public proto: Array<string> = [], 
+                public states: Array<State> = []) {
         
-        super(aliases, PrimitiveTypes.Ref, id, val, isLocal, proto)
+        super(aliases, PrimitiveTypes.Ref, id, val, isLocal, proto, states)
     }
 }
 
@@ -209,9 +221,10 @@ export class Graph extends Node {
                 readonly id: number, 
                 readonly val: string, 
                 readonly isLocal: boolean,
-                public proto: Array<string> = []) {
+                public proto: Array<string> = [], 
+                public states: Array<State> = []) {
 
-        super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, isLocal, proto)
+        super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, isLocal, proto, states)
     }
 
     public addNode(node: GraphNode, status: Status): void {
@@ -292,7 +305,8 @@ export class State {
 
     constructor(readonly names: Array<string>,  // e.g. l0, l1, ...
                 readonly innervals: Array<string>, 
-                readonly aliases: Array<string>) { // e.g. Heap@1, PostHeap@@2, etc.
+                readonly aliases: Array<string>,
+                readonly localStoreHash: string | undefined = undefined) { // e.g. Heap@1, PostHeap@@2, etc.
         
         Object.defineProperty(this, 'name', {
             get: function() {
@@ -313,6 +327,14 @@ export class State {
 
     public valStr(): string {
         return this.innervals.join('=')
+    }
+
+    public hash(): string {
+        if (this.localStoreHash === undefined) {
+            return this.nameStr()
+        } else {
+            return `${this.nameStr()}///${this.localStoreHash}`
+        }
     }
 }
 
@@ -339,22 +361,22 @@ export class EquivClasses {
         [Key: string]: Array<Node>,
     } = {}
 
-    public static key(innerval: string, type: ViperType): string {
-        return `${innerval}:${type.typename}`
+    public static key(innerval: string, states: Array<State>, type: ViperType): string {
+        return `${innerval}@[${states.map(s => s.nameStr()).join('/')}]:${type.typename}`
     }
 
-    public has(innerval: string, type: ViperType): boolean {
-        let key = EquivClasses.key(innerval, type)
+    public has(innerval: string, states: Array<State>, type: ViperType): boolean {
+        let key = EquivClasses.key(innerval, states, type)
         return this.__buf.hasOwnProperty(key)
     }
 
-    public get(innerval: string, type: ViperType): Array<Node> {
-        let key = EquivClasses.key(innerval, type)
+    public get(innerval: string, states: Array<State>, type: ViperType): Array<Node> {
+        let key = EquivClasses.key(innerval, states, type)
         return this.__buf[key]
     }
 
-    public set(innerval: string, type: ViperType, nodes: Array<Node>): void {
-        let key = EquivClasses.key(innerval, type)
+    public set(innerval: string, states: Array<State>, type: ViperType, nodes: Array<Node>): void {
+        let key = EquivClasses.key(innerval, states, type)
         this.__buf[key] = nodes
     }
 }
