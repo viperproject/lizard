@@ -1,6 +1,5 @@
-import { node } from "webpack"
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Node, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool, castToMapEntry } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Atom, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool, castToMapEntry, NodeClass, NodeSet } from "./Models"
 import { Query } from "./Query"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
@@ -11,6 +10,8 @@ export interface SessionOpts {
 }
 
 const wildcard = undefined
+
+const collect = (xs: any) => (xs===undefined) ? [] : [xs]
 
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
@@ -48,19 +49,12 @@ export class Session {
         return next_node_id
     }
 
-    private mkNode(name: string, innerval: string, is_local: boolean, 
+    private mkAtom(name: string, innerval: string, is_local: boolean, 
                    type: ViperType | undefined = undefined, 
-                   proto: Array<string> | undefined = undefined, 
-                   states: Array<State> = []): Node {
+                   states: Array<State> = []): Atom {
 
-        // Special case the null node
-        if (name === this.nullNodeName()) {
-            this.null_node = new GraphNode([name], true, this.freshNodeId(), innerval, false, proto)
-            return this.null_node!
-        }
-        if (proto === undefined) {
-            proto = new Array(this.innerToProto(name))
-        }
+        const id = this.freshNodeId()
+        
         if (type === undefined) {
             // If type is not provided, try to retrieve it from available program definitions
             type = this.viperTypes!.get(name)
@@ -70,13 +64,8 @@ export class Session {
                 type = PolymorphicTypes.Other(innerval)
             }
         }
-        if (type.typename === 'Set[Ref]') {
-            return new Graph([name], this.freshNodeId(), innerval, is_local, proto, states)
-        } else if (type && type.typename === 'Ref') {
-            return new GraphNode([name], false, this.freshNodeId(), innerval, is_local, proto, states)
-        } else {
-            return new Node([name], type, this.freshNodeId(), innerval, is_local, proto, states)
-        }
+        
+        return new Atom(type, id, innerval, is_local, name, states)
     }
 
     // static myRelations = ['[2]', '[3]', '[4:=]', 
@@ -140,10 +129,10 @@ export class Session {
         }
     }
 
-    private atoms: Array<Node> | undefined = undefined
+    private atoms: Array<Atom> | undefined = undefined
     public states: Array<State> | undefined = undefined 
     private extended_equiv_classes = new EquivClasses()
-    private transitive_nodes = new Map<number, Node>()
+    private transitive_nodes = new NodeSet()
 
     private latestQuery: GraphModel | undefined = undefined 
     private graphModel: GraphModel | undefined = undefined
@@ -187,8 +176,10 @@ export class Session {
         // 0. Collect type information
         this.viperTypes = new ViperTypesProvider(this.programDefinitions!, 
             // e.g. "X@1" is an inner name for the prototype "X"
-            (innername: string) => Session.innerToProto(this.isCarbon(), innername))  
-
+            (innername: string) => Session.innerToProto(this.isCarbon(), innername))
+        
+        this.setNull()
+        
         // 1. Collect program states and merge the potential aliases among them
         this.states = this.collectStates()
 
@@ -197,14 +188,14 @@ export class Session {
         this.states = this.remapStates(this.states)
 
         // 3. Extract all atoms (i.e. top-level constant_entries) from the raw model. 
-        this.atoms = new Array<Node>()
+        this.atoms = new Array<Atom>()
         Object.entries(this.model!).forEach(pair => {
             let name = pair[0]
             let entry = pair[1]
             
             if (entry.type === 'constant_entry' || entry.type == 'application_entry') {
                 let innerval = Session.serializeEntryValue(entry)
-                let node = this.mkNode(name, innerval, true)
+                let node = this.mkAtom(name, innerval, true)
                 this.atoms!.push(node)
             }
         })
@@ -215,9 +206,9 @@ export class Session {
 
     private equiv_classes = new EquivClasses()
 
-    private static collectEquivClasses(nodes: Array<Node>, ec: EquivClasses): void {
+    private static collectEquivClasses(nodes: Array<Atom>, ec: EquivClasses): void {
         nodes.forEach(node => {
-            let key: [string, Array<State>, ViperType] = [node.val, node.states, node.type]
+            let key: [string, ViperType] = [node.val, node.type]
             if (ec.has(...key)) {
                 ec.get(...key)!.push(node)
             } else {
@@ -226,12 +217,8 @@ export class Session {
         })
     }
 
-    static localVarKey(stateLbl: string, varName: string): string {
-        return `${stateLbl}_${varName}`
-    }
-    // Maps labels/names to values (see localVarKey)
-    private collectLocalStoreVars(): Array<Node> | undefined {
-        let res = new Array<Node>()
+    private collectLocalStoreVars(): Array<Atom> | undefined {
+        let res = new Map<string, Atom>()  // from node's (name, state) to node
 
         // Entry example: "$local$a$2" -> 22
         let localEntris = Object.entries(this.model!).filter(pair => pair[0].startsWith('$local'))
@@ -264,92 +251,62 @@ export class Session {
             let stateLabel = m[2]
             let val = Session.serializeEntryValue(entry)
             
-            // Add corresponding atom to model
-            let type = this.viperTypes!.get(varName)
             let lblName = `l${stateLabel}`
             let statesForThisVar = states.get(lblName)
             if (statesForThisVar === undefined) {
-                Logger.error(`cannot find states for label '${lblName}'`)
-                statesForThisVar = []
+                throw `broken instrumentation: no heap states specified in the model for label ${lblName}`
             }
-            let atom = this.mkNode(varName, val, true, type, [varName], statesForThisVar)
-            this.atoms!.push(atom)
-            res.push(atom)
+
+            let key = [varName, statesForThisVar.map(s => s.hash()).join('/')].join('///')
+
+            if (!res.has(key)) {
+                // Add corresponding atom to model
+                let type = this.viperTypes!.get(varName)
+                let atom = this.mkAtom(varName, val, true, type, statesForThisVar)
+                this.atoms!.push(atom)
+                res.set(key, atom)
+            }
         })
 
-        return res
+        return Array.from(res.values())
     }
 
-    private collectInitialGraphsAndNodes(best_effort: boolean): Array<Node> {
+    private collectInitialGraphsAndNodes(best_effort: boolean): Array<Atom> {
         
         let names: Array<string> 
         if (best_effort) {
             names = this.getDefinitionNames('Argument')
                     .concat(this.getDefinitionNames('Local'))
                     .concat(this.getDefinitionNames('Return'))
-                    .concat(this.nullNodeName())
         } else {
             // Normal mode, in case the program was properly instrumented
             names = this.getDefinitionNames('Argument')
-                    .concat(this.nullNodeName())
         }
 
         let atoms = names.flatMap(proto => 
             this.atoms!.filter(atom => {
-                if (atom.aliases.length > 1) {
-                    throw `each node should have one internal name at this point, ` + 
-                          `but ${JSON.stringify(atom)} has more.`
-                }
-                let atom_name = atom.aliases[0]
+                let atom_name = atom.proto
                 return this.isPrototypeOf(proto, atom_name)
-            })
-            /*.map(atom => {
-                // Set the prototype variable for this atom
-                atom.proto = new Array(proto)
-                atom
-            })*/)
+            }))
 
         if (atoms.length < names.length) {
             Logger.error(`could not find some atom definitions in raw model`)
         }
 
-        // Filter old versions of variables in case the encoding uses SSA
-        return atoms//this.extractLatestAssignedVars(atoms)
+        return atoms
     }
 
     // map from inner values to nodes
-    private nonAliasingNodesMap = new Map<string, Node>()
+    private nonAliasingNodesMap = new NodeSet()
+    
+    private mergeAliases(nodes: Array<Atom>): Array<NodeClass> {
+        let eq = EquivClasses.from(nodes)
+        return eq.toNodeClassArray(() => this.freshNodeId())
+    }
 
-    private mergeAliases(nodes: Array<Node>): Array<Node> {
-
-        let new_nonaliasing_nodes = new Set<Node>()
-
-        nodes.forEach(node => {
-            let node_name = node.aliases[0]
-
-            let key = EquivClasses.key(node.val, node.states, node.type)
-            if (this.nonAliasingNodesMap.has(key)) {
-                // We already have a representative for this node inner value+type
-                let na_node = this.nonAliasingNodesMap.get(key)!
-                
-                // FIXME: Checking membership in the array [[na_node.aliases]] is not efficient; would be better to store aliases in a set. 
-                // FIXME: However, sets are not natively handles by our JSON visualization, so we bear with this theoretical inefficiency.  
-                if (!na_node.aliases.includes(node_name)) {
-                    // This is a new alias
-                    na_node.aliases.push(node_name)
-                    if (isRef(node.type) && (<GraphNode> node).isNull) {
-                        (<GraphNode> na_node).isNull = true
-                    }
-                } 
-                new_nonaliasing_nodes.add(na_node)
-            } else {
-                // This is a new node inner value
-                this.nonAliasingNodesMap.set(key, node)
-                new_nonaliasing_nodes.add(node)
-            }
-        })
-
-        return Array.from(new_nonaliasing_nodes)
+    private mergeClasses(nodes: Array<NodeClass>): Array<NodeClass> {
+        let freshNodes = this.nonAliasingNodesMap.merge(nodes)
+        return freshNodes
     }
 
     private collectReach(nodes: Array<GraphNode>): Array<LocalRelation> {
@@ -393,25 +350,42 @@ export class Session {
 
         // Deduce relations for each field, node, state
         let field_relations = useful_fields.flatMap(fname => 
-            nodes.flatMap(node => {
-                let state_to_rels = this.collectFieldValueInfo(node, fname)
-                let rels = this.states!.flatMap(state => 
-                    state.innervals.flatMap(state_inerval => {
-                        let [adj_node, status] = state_to_rels(state.nameStr(), state_inerval)
-                        if (adj_node === undefined) {
-                            return []
+            this.states!.flatMap(state => {
+                let rels = nodes.filter(node => node.aliases.find(alias => alias.states.length === 0 || alias.states.includes(state)) !== undefined).flatMap(node => {
+                    let state_to_rels = this.collectFieldValueInfo(node, fname)
+                    if (state.innervals.length !== 1) {
+                        throw `state innervals must be unique (${state.nameStr()} has ${state.innervals.join(', ')})`
+                    }
+                    let [adj_node, status] = state_to_rels(state)
+                    if (adj_node === undefined) {
+                        return []
+                    } else {
+                        if (this.nonAliasingNodesMap.has(adj_node.val, adj_node.type)) {
+                            // merge 
+                            let oldSucc = this.nonAliasingNodesMap.get(adj_node.val, adj_node.type)!
+                            oldSucc.aliases.push(...adj_node.aliases)
+                            adj_node = oldSucc
+                        } else if (this.transitive_nodes.has(adj_node.val, adj_node.type)) {
+                            // transitive node already built on this iteration
+                            let oldSucc = this.transitive_nodes.get(adj_node.val, adj_node.type)!
+                            oldSucc.aliases.push(...adj_node.aliases)
+                            adj_node = oldSucc
                         } else {
-                            return [new Relation(fname, state, node.id, adj_node.id, status)]
+                            // new transitive node
+                            this.transitive_nodes.add(adj_node)
                         }
-                    }))
-                node.fields.push(...rels)
+                        let new_rel = new Relation(fname, state, node.id, adj_node.id, status)
+                        node.fields.push(new_rel)
+                        return [new_rel]
+                    }
+                })
                 return rels
             }))
 
         return field_relations
     }
 
-    private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Set<Graph>): void {
+    private connectNodesToGraphs(nodes: Array<GraphNode>, graphs: Array<Graph>): void {
         let rel_name = this.setIncludesRelationName()
         let rel = this.getEntryByName(rel_name)
         if (rel === undefined) {
@@ -420,52 +394,77 @@ export class Session {
         }
         graphs.forEach(graph => {
             nodes.forEach(node => {
-                let [val, status] = this.applySetInMapEntry(rel!, graph, node)
+                let [val, status] = this.applySetInMapEntry(rel!, graph.val, node.val)
                 if (this.parseInnervalAsSmtBool(val) === 'true') {
-                    // this node belongs to this graph
+                    // this node belongs to this graph class
                     graph.addNode(node, status)
                 }
             })
         })
     }
 
-    private node_hash = new Map<number, Node>()
-    private graphs = new Set<Graph>()
+    private node_hash = new Map<number, GraphNode>()
+    private graph_hash = new Map<number, Graph>()
+
+    private graphs = new Array<Graph>()
     private latest_client_footprint: Graph | undefined = undefined
     private latest_callee_footprint: Graph | undefined = undefined
     
     private graph_nodes = new Array<GraphNode>()
-    private scalar_nodes = new Array<Node>()
+    private scalar_nodes = new Array<NodeClass>()
     private fields = new Array<Relation>()
     private reach = new Array<LocalRelation>()
 
-    private produceGraphModelRec(starting_atoms: Array<Node>, iteration=1): void {
+    private getNodeById(id: number): GraphNode {
+        let node = this.node_hash.get(id)
+        if (node === undefined) {
+            throw `cannot find node with ID ${id}`
+        }
+        return node
+    }
+
+    private getGraphById(id: number): Graph {
+        let graph = this.graph_hash.get(id)
+        if (graph === undefined) {
+            throw `cannot find graph with ID ${id}`
+        }
+        return graph
+    }
+
+    private produceGraphModelRec(startingNodeClasses: Array<NodeClass>, iteration=1): void {
         Logger.info(`iteration №${iteration} of analyzing the heap model`)
-        
-        // A. Update hash s.t. nodes can be retrieved efficiently, via their IDs
-        starting_atoms.forEach(node => {
-            if (this.node_hash.has(node.id)) {
-                throw `saturation error: node with ID ${node.id} is already present in the node hash`
-            }
-            this.node_hash.set(node.id, node)
-        })
 
         // B. Deduce and merge aliasing nodes 
-        Session.collectEquivClasses(starting_atoms, this.equiv_classes)
-        let new_nonaliasing_nodes = this.mergeAliases(starting_atoms)
+        let new_nonaliasing_nodes = this.mergeClasses(startingNodeClasses)
+
+        // A. Update hash s.t. nodes can be retrieved efficiently, via their IDs
+        // new_nonaliasing_nodes.forEach(node => {
+            // if (this.node_hash.has(node.id)) {
+            //     throw `saturation error: node with ID ${node.id} is already present in the node hash`
+            // }
+            // this.node_hash.set(node.id, node)
+        // })
 
         // C. Group nodes by type: Ref, Set[Ref], Others
         //    Keep only the latest version of client and callee footprints
         let new_graph_nodes = new Array<GraphNode>()
-        new_nonaliasing_nodes.forEach(node => {
-            if (node.type && isRef(node.type)) {
-                let graph_node = <GraphNode> node
-                new_graph_nodes.push(graph_node)
-            } else if (node.type && isSetOfRefs(node.type)) {
-                let graph = <Graph> node
-                this.graphs.add(graph)
+        new_nonaliasing_nodes.forEach(nodeClass => {
+            if (nodeClass.type && isRef(nodeClass.type)) {
+                let graphNode = GraphNode.from(nodeClass, this.isValNull(nodeClass.val))
+                new_graph_nodes.push(graphNode)
+                if (this.node_hash.has(graphNode.id)) {
+                    throw `saturation error: node with ID ${graphNode.id} is already present in the node hash`
+                }
+                this.node_hash.set(graphNode.id, graphNode)
+            } else if (nodeClass.type && isSetOfRefs(nodeClass.type)) {
+                let graphClass = Graph.from(nodeClass)
+                this.graphs.push(graphClass)
+                if (this.graph_hash.has(graphClass.id)) {
+                    throw `saturation error: graph with ID ${graphClass.id} is already present in the graph hash`
+                }
+                this.graph_hash.set(graphClass.id, graphClass)
             } else {
-                this.scalar_nodes.push(node)
+                this.scalar_nodes.push(nodeClass)
             }
         })
         this.graph_nodes.push(...new_graph_nodes)
@@ -479,8 +478,8 @@ export class Session {
         this.fields.push(...new_fields)
 
         // F. Some of the relations may lead to new nodes that must be encountered for in the model. 
-        let trans_nodes = Array.from(this.transitive_nodes.values())
-        this.transitive_nodes = new Map<number, Node>()
+        let trans_nodes = this.transitive_nodes.getNodeClasses()
+        this.transitive_nodes = new NodeSet()
 
         // G. Saturate! 
         if (trans_nodes.length > 0) {
@@ -490,11 +489,11 @@ export class Session {
         }
     }
 
-    private extractFootprints(): void {
+    private static extractFootprints(graphs: Array<Graph>): {callee?: Graph, client?: Graph} {
+        let result: {callee?: Graph, client?: Graph} = new Object()
         let client_footprint_max_index = -Infinity
         let callee_footprints_max_index = -Infinity
-        this.graphs.forEach(nodeset => {
-            let graph = <Graph> nodeset
+        graphs.forEach(graph => {
             let is_client_footprint_proto = false
             let is_callee_footprint_proto = false
             let highest_client_footprint_index: number = -Infinity
@@ -503,7 +502,7 @@ export class Session {
             graph.aliases.forEach(alias => {
                 // Handle the case in which there are several aliasing node sets 
                 //  that potentially represent the footprints
-                let {proto, suffix, index} = Session.innerNameParser(alias)
+                let {proto, suffix, index} = Session.innerNameParser(alias.proto)
                 if (proto === 'G') {
                     is_client_footprint_proto = true
                     if (index === undefined) {
@@ -527,29 +526,30 @@ export class Session {
                     // choose the entry without index over all possible other entries
                     // e.g. "G" rather than "G@1"
                     client_footprint_max_index = +Infinity 
-                    this.latest_client_footprint = graph
+                    result['client'] = graph
 
                 } else if (client_footprint_max_index < highest_client_footprint_index) {
                     // choose the entry with the highest index
                     // e.g. "G@1" rather than "G@0"
                     client_footprint_max_index = highest_client_footprint_index
-                    this.latest_client_footprint = graph
+                    result['client'] = graph
                 }
             } else if (is_callee_footprint_proto) {
                 if (highest_callee_footprint_index === undefined && highest_callee_footprint_index === +Infinity) {
                     // choose the entry without index over all possible other entries
                     // e.g. "H" rather than "H@1"
                     callee_footprints_max_index = +Infinity
-                    this.latest_callee_footprint = graph
+                    result['callee'] = graph
 
                 } else if (callee_footprints_max_index < highest_callee_footprint_index) {
                     // choose the entry with the highest index
                     // e.g. "H@1" rather than "H@0"
                     callee_footprints_max_index = highest_callee_footprint_index 
-                    this.latest_callee_footprint = graph
+                    result['callee'] = graph
                 }
             }
         })
+        return result
     }
 
     private static transitiveClosure(state: State, rels: Array<Relation>): Set<Relation> {
@@ -632,11 +632,14 @@ export class Session {
         // 0. Remove relations that originate from default model cases
         raw_reach_rels = raw_reach_rels.filter(rel => this.filter_rel(rel, rel.status !== 'default', `it originates from one of the default model cases`))
 
+        // 0.5. Remove trivial relation, e.g. P_(G, X, X)
+        raw_reach_rels = raw_reach_rels.filter(rel => this.filter_rel(rel, rel.pred_id !== rel.succ_id, `it is trivial`))
+
         // 1. Remove spurious relations, 
         // e.g. $P(A, x, y)$ where $x \notin A$
         raw_reach_rels = raw_reach_rels.filter(rel => {
-            let graph = <Graph> this.node_hash.get(rel.graph_id)!
-            let pred = <GraphNode> this.node_hash.get(rel.pred_id)!
+            let graph = this.graph_hash.get(rel.graph_id)!
+            let pred = GraphNode.from(this.node_hash.get(rel.pred_id)!)
             return this.filter_rel(rel, graph.hasNode(pred), `local relation must originate in it's local graph`)
         })
 
@@ -680,7 +683,7 @@ export class Session {
             
         raw_reach_rels.forEach(rel => {
             let key = relkey(rel)
-            let graph = this.node_hash.get(rel.graph_id)
+            let graph = this.graph_hash.get(rel.graph_id)
             if (graph === this.latest_client_footprint) {
                 if (rel.name === 'P') {
                     client_pos_reach.set(key, rel)
@@ -743,19 +746,24 @@ export class Session {
     public produceGraphModel(): GraphModel {
         // 0. Collect initial nodes
         let local_node_versions = this.collectLocalStoreVars()
-        let starting_atoms: Array<Node>
+        let starting_atoms: Array<Atom>
         if (local_node_versions === undefined) {
             starting_atoms = this.collectInitialGraphsAndNodes(true)
         } else {
             starting_atoms = this.collectInitialGraphsAndNodes(false)
             starting_atoms.push(...local_node_versions)
         }
+
+        Session.collectEquivClasses(starting_atoms, this.equiv_classes)  // optional
+        let starting_nodes = this.mergeAliases(starting_atoms)
         
         // 1. Process and Saturate! 
-        this.produceGraphModelRec(starting_atoms)
+        this.produceGraphModelRec(starting_nodes)
         
         // 2. Extract latest footprints (possibly, aliasing groups of node sets)
-        this.extractFootprints()
+        let footprints = Session.extractFootprints(this.graphs)
+        this.latest_callee_footprint = footprints.callee
+        this.latest_client_footprint = footprints.client
 
         // 3. Collect reachability information
         let non_null_nodes = this.graph_nodes.filter(n => !n.isNull)
@@ -786,14 +794,32 @@ export class Session {
 
         // Filter the states
         let selected_states = new Set<string>(query.states)
-        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.nameStr()))
         let filtered_states = this.graphModel!.states.filter(state => selected_states.has(state.nameStr()))
-        let filtered_reach = this.graphModel!.reach.filter(rel => selected_states.has(rel.state.nameStr()))
+        
+        let filtered_nodes = this.graphModel!.graphNodes.flatMap(n => collect(n.project(selected_states)))
+        let selected_node_ids = new Set(filtered_nodes.map(n => n.id))
+
+        let filtered_graphs = this.graphModel!.graphs.flatMap(g => collect(g.project(selected_states, selected_node_ids)))
+        let filtered_scalars = this.graphModel!.scalarNodes.flatMap(c => collect(c.project(selected_states)))
+
+        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.nameStr()))
+        let filtered_reach = this.graphModel!.reach.filter(rel => {
+            let isSelected = selected_states.has(rel.state.nameStr())
+            let isGraphActive = filtered_graphs.map(g => g.id).includes(rel.graph_id)  // could be optimized
+            let isPredActive = selected_node_ids.has(rel.pred_id)
+            let isSuccActive = selected_node_ids.has(rel.succ_id)
+            return isSelected && isPredActive && isSuccActive && isGraphActive
+        })
+
         this.latestQuery = new GraphModel()
         Object.assign(this.latestQuery, this.graphModel!)
         this.latestQuery!.fields = filtered_fields
         this.latestQuery!.states = filtered_states
         this.latestQuery!.reach = filtered_reach
+        this.latestQuery!.graphNodes = filtered_nodes
+        this.latestQuery!.graphs = filtered_graphs
+        this.latestQuery!.scalarNodes = filtered_scalars
+        this.latestQuery!.footprints = Session.extractFootprints(filtered_graphs)
         
         return this.latestQuery!
     }
@@ -881,7 +907,7 @@ export class Session {
         }
     }
 
-    private collectFieldValueInfo(node: Node, fname: string): (state_name: string, state_innerval: string) => [Node | undefined, Status] {
+    private collectFieldValueInfo(node: GraphNode, fname: string): (state: State) => [NodeClass | undefined, Status] {
         let rel_name = this.fieldLookupRelationName(fname)
         let rel_maybe = Object.entries(this.model!).find(pair => pair[0] === rel_name)
         if (!rel_maybe) {
@@ -895,8 +921,9 @@ export class Session {
         let simple_fun = this.partiallyApplyFieldMapEntry(<MapEntry> rel, node.val, field_node_val)
 
         // We cannot pass just the state itself because consolidated states may have multiple inner values
-        return (state_name: string, state_innerval: string) => {
-            let [succ_innerval, status] = simple_fun(state_innerval)
+        return (state: State) => {
+            
+            let [succ_innerval, status] = simple_fun(state.val)
             let field_type = this.viperTypes!.get(fname)
 
             // Check the value type. If the type in the model contradicts the field type, 
@@ -914,29 +941,18 @@ export class Session {
                 return [undefined, status]
             }
             
-            let key = EquivClasses.key(succ_innerval, node.states, field_type)
-            let succ: Node
-            if (this.nonAliasingNodesMap.has(key)) {
-                // succ already has a representative node
-                succ = this.nonAliasingNodesMap.get(key)!
-            } else {
-                // this is a fresh value; create a new atom (per alias) to support it
-                Logger.info(`no atom found for value ${succ_innerval} of type ${field_type.typename}; ` + 
-                            `adding transitive node(s): `)
-                let aliasing_succs = node.aliases.map(pred_alias_name => {
-                    // All aliases of [[node]] yield new aliasing fresh nodes. 
-                    //  E.g.: {X.next, Y.next, Z.next} alias if {X, Y, Z} alias. 
-                    // Note that we postpone the alias analysis until the next iteration of the core algorithm, 
-                    //  at which stage all transitive nodes are going to be processed. 
-                    let alias_name = `${pred_alias_name}.${fname}[${state_name}]`
-                    let alias = this.mkNode(alias_name, succ_innerval, false, field_type)
-                    this.transitive_nodes.set(alias.id, alias)
-                    Logger.info(` ${alias.repr(true, true)}`)
-                    return alias
-                })
-                succ = aliasing_succs.pop()!
-                this.nonAliasingNodesMap.set(key, succ)
-            }
+            let aliasing_succs = node.aliases.map(pred_alias => {
+                // All aliases of [[node]] yield new aliasing fresh nodes. 
+                //  E.g.: {X.next, Y.next, Z.next} alias if {X, Y, Z} alias. 
+                // Note that we postpone the alias analysis until the next iteration of the core algorithm, 
+                //  at which stage all transitive nodes are going to be processed. 
+                let alias_name = `${pred_alias.name()}.${fname}[${state.nameStr()}]`
+                let alias = this.mkAtom(alias_name, succ_innerval, false, field_type, [state])
+                Logger.info(` ${alias.repr(true, true)}`)
+                return alias
+            })
+            let succ = new NodeClass(this.freshNodeId(), succ_innerval, field_type, aliasing_succs)
+            
             return [succ, status]
         }
     }
@@ -1069,6 +1085,26 @@ export class Session {
         }
     }
     
+
+    private __nullInnerVal: string | undefined = undefined
+    private isValNull(innerval: string): boolean {
+        if (this.__nullInnerVal === undefined) {
+            return false
+        } else {
+            return innerval === this.__nullInnerVal
+        }
+    }
+    private setNull(): void {
+        let nullEntries = Object.entries(this.model!).filter(pair => pair[0] === this.nullNodeName())
+        if (nullEntries.length === 0) {
+            throw `model does not specify null`
+        } else if (nullEntries.length > 1) {
+            throw `model specifies multiple null entries`
+        }
+        let nullEntry = nullEntries.pop()![1]
+        this.__nullInnerVal = getConstantEntryValue(nullEntry)
+    }
+
     /** Backend-specific code */
 
     private nullNodeName(): string {
@@ -1161,7 +1197,7 @@ export class Session {
 
     private remapStates(states: Array<State>): Array<State> {
         let state_fun = '$state'
-        let heap_fun = '$heap'
+        // let heap_fun = '$heap'
         let state_lbl_fun = this.getEntryByName(state_fun)
         // let heap_snap_fun = this.getEntryByName(heap_fun)
         if (state_lbl_fun === undefined) {
@@ -1172,7 +1208,7 @@ export class Session {
             // let heap_snap_entry = castToMapEntry(heap_snap_fun)
 
             if (Session.isMapEntryUnspecified(state_lbl_entry)) {
-                Logger.warn(`could not map program states (interpretation of function '${state_fun}' or '${heap_fun}' is unspecified)`)
+                Logger.warn(`could not map program states (interpretation of function '${state_fun}' is unspecified)`)
                 return Session.triviallyRemapStates(states)
             }
             
@@ -1237,7 +1273,7 @@ export class Session {
             })
 
             // 2. Map raw states to state names using the $state function
-            let remapped_states = new Map<string, State>()  // maps heap innervals/ local store hashes to states
+            let remapped_states = new Map<string, State>()  // Maps heap/store pairs to states
             states.forEach(raw_state => {
                 if (remapped_states.has(raw_state.innervals[0])) {
                     throw `unexpected state alias with value ${raw_state.innervals[0]}`
@@ -1278,21 +1314,20 @@ export class Session {
                 }
             })
 
-            // 3. Merge states that have labels with the same innterval
+            // 3. Merge states that have labels with the same innerval
             //   After this step, states may have multiple innervals for the first time. 
-            let na_states = new Map<string, State>()
+            let na_states = new Map<string, State>()  // maps labels (e.g. "l1" or "l0/l1/l2") to states
 
             let potentially_aliasing_states = Array.from(non_aliasing_states.values())
             potentially_aliasing_states.forEach(state => {
                 let key = state.nameStr()
                 if (na_states.has(key)) {
                     let old_state = na_states.get(key)!
-                    old_state.aliases.push(...state.aliases)
-                    old_state.aliases.sort()
+                    old_state.aliases = Array.from(new Set(old_state.aliases.concat(state.aliases))).sort()
                     if (old_state.valStr() === state.valStr()) {
                         throw `different states' values should not be equal before state consolidation (${old_state}, ${state})`
                     }
-                    // We assume that these states are effectiely equal since the labels to which they correspond are equal.
+                    // We assume that these states are effectively equal since the labels to which they correspond are equal.
                     state.innervals.forEach(dropped_innerval => 
                         Logger.warn(`ignoring states with innerval ${dropped_innerval} as they are equal to ${old_state.nameStr()}`))
                     // old_state.innervals.push(...state.innervals)
@@ -1434,13 +1469,13 @@ export class Session {
         }
     }
 
-    private applySetInMapEntry(entry: ModelEntry, graph: Graph, node: GraphNode): [string, Status] {
+    private applySetInMapEntry(entry: ModelEntry, graphVal: string, nodeVal: string): [string, Status] {
         if (this.isCarbonTypeEncodingA()) {
-            return Session.appleEntry(entry, [undefined, undefined, graph.val, node.val])
+            return Session.appleEntry(entry, [undefined, undefined, graphVal, nodeVal])
         } else if (this.isCarbonTypeEncodingP()) {
-            return Session.appleEntry(entry, [graph.val, node.val])
+            return Session.appleEntry(entry, [graphVal, nodeVal])
         } else {
-            return Session.appleEntry(entry, [node.val, graph.val])
+            return Session.appleEntry(entry, [nodeVal, graphVal])
         }
     }
 
@@ -1549,48 +1584,5 @@ export class Session {
 
     private innerToProto(inner_name: string): string {
         return Session.innerToProto(this.isCarbon(), inner_name)
-    }
-
-    /* We are interested in verifying the failed assertion --- 
-    *   a property of the last reachable state in the trace. 
-    *  Since Silicon uses the SSA form, we need to keep only only 
-    *   the latest version of each variable in the counterexample. 
-    *  e.g. "X@1", "X@2", "X@3" --> "X@3"
-    */ 
-    private extractLatestAssignedVars(nodes: Array<Node>): Array<Node> {
-        if (this.isCarbon()) {
-            return nodes
-        } else {
-            let ssa_map = new Map<string, [number, Node]>()
-            let immutable_things = new Array<Node>()
-
-            nodes.forEach(node => {
-                let names = node.aliases
-                if (names.length > 1) {
-                    throw `at this point, each node is expected to have only one name`
-                }
-                let name = names[0]
-                let name_struct = Session.innerNameParser(name)
-                let proto = name_struct.proto
-                let index = name_struct.index
-                if (index === undefined) {
-                    // No index --- that means this is an immutable thing and we should keep it. 
-                    //  e.g. "s@$"
-                    immutable_things.push(node)
-                } else {
-                    // Maximize the index for each prototype
-                    if (ssa_map.has(proto)) {
-                        let max_index_so_far = ssa_map.get(proto)![0]
-                        if (max_index_so_far < index) {
-                            ssa_map.set(proto, [index, node])
-                        } 
-                    } else {
-                        ssa_map.set(proto, [index, node])
-                    }
-                }
-            })
-
-            return Array.from(ssa_map.values()).map(pair => pair[1]).concat(immutable_things)
-        }
     }
 }

@@ -1,4 +1,4 @@
-import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Node, Relation, State, Status } from "./Models";
+import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Atom, Relation, State, Status, NodeClass } from "./Models";
 
 export interface RenderOpts {
     is_carbon: boolean,
@@ -26,7 +26,7 @@ export class DotGraph {
     private __client: Graph | undefined
     private __callee: Graph | undefined
     private __graph_node_map = new Map<number, GraphNode>()
-    private __scalar_node_map = new Map<number, Node>()
+    private __scalar_node_map = new Map<number, NodeClass>()
     private __reach_map = new Map<ReachKey, LocalRelation>()
     
     private getGraphById(graph_id: number): Graph | undefined {
@@ -37,7 +37,7 @@ export class DotGraph {
         return this.__graph_node_map.get(node_id)
     }
 
-    private getScalarNodeById(node_id: number): Node | undefined {
+    private getScalarNodeById(node_id: number): NodeClass | undefined {
         return this.__scalar_node_map.get(node_id)
     }
 
@@ -45,7 +45,7 @@ export class DotGraph {
         return this.__reach_map.get(ReachKey(state, graph_id, pred_id, succ_id))
     }
 
-    private renderNodeValue(node: Node): string {
+    private renderNodeValue(node: NodeClass): string {
         if (isNull(node)) {
             return 'null'
         }
@@ -96,7 +96,7 @@ export class DotGraph {
         return `edge [fontname="Helvetica" fontsize="12" arrowsize=0.4]`
     }
 
-    private nodeSettings(node: Node) { 
+    private nodeSettings(node: NodeClass) { 
         return ``//`style="filled" penwidth=1 fillcolor="white" fontname="Courier New" shape="Mrecord" `
     }
 
@@ -131,9 +131,9 @@ export class DotGraph {
             this.__state_map.has(field.state.nameStr()))
         .flatMap(field => {  
 
-            let state = (this.__state_map.size > 1) 
-                ? this.renderStateLabel(field.state)
-                : ``
+            let state = this.renderStateLabel(field.state)
+
+            
 
             let succ = this.getGraphNodeById(field.succ_id)
 
@@ -170,7 +170,10 @@ export class DotGraph {
         } else {
             status = ``
         }
-        let head_label = node.isLocal ? `${node.proto} = ${this.renderNodeValue(node)}` : this.renderNodeValue(node)
+        let withoutStates = (this.__state_map.size === 1)
+        let head_label = node.isLocal() 
+            ? `${node.repr(true, true, withoutStates, true, true)} = ${this.renderNodeValue(node)}` 
+            : this.renderNodeValue(node)
         head_label = `${status}${head_label}`
 
         let table: string
@@ -197,7 +200,7 @@ export class DotGraph {
 
     private renderCalleeGraph(): string {
         let callee = this.__callee!
-        let state = this.renderStateLabel(callee.states)
+        let state = this.renderStateLabel(callee.aliases[0].states)
         return `subgraph cluster_${callee.id} {\n` + 
                `\t\t${this.clusterPreamble(DotGraph.CALLEE_COLOR, DotGraph.CALLEE_BGCOLOR)}\n` + 
                `\t\tlabel="Callee${state} = ${this.renderNodeValue(callee)}";\n` + 
@@ -220,7 +223,7 @@ export class DotGraph {
             frame_str = client.getNodesArray().map(node => this.renderNode(node, client)).join('\n\t')   
         }
 
-        let state = this.renderStateLabel(client.states)
+        let state = this.renderStateLabel(client.aliases[0].states)
 
         return `subgraph cluster_${client.id} {\n` + 
                 `\t\t${this.clusterPreamble(DotGraph.CLIENT_COLOR, DotGraph.CLIENT_BGCOLOR)}\n` + 
@@ -230,7 +233,7 @@ export class DotGraph {
     }
 
     private renderStateLabel(state: State | Array<State>): string {
-        if (this.__state_map.size === 0 || Array.isArray(state) && state.length === 0) {
+        if (this.__state_map.size < 2 || Array.isArray(state) && state.length === 0) {
             return ``
         } else if (Array.isArray(state)) {
             return `<SUB><FONT POINT-SIZE="10">${state.map(s => s.nameStr()).join('/')}</FONT></SUB> `
@@ -248,7 +251,7 @@ export class DotGraph {
                   `but N${field.pred_id} or N${field.succ_id} are not`
         }
 
-        let status = field.status === 'default' ? `labeldistance=0 taillabel=<*>` : ``
+        let status = (field.status === 'default') ? `labeldistance=0 taillabel=<*>` : ``
         if (this.opts.dotnodes) {
             let state_lbl = this.renderStateLabel(field.state)
             let label = `<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0"><TR><TD>${field.name}${state_lbl}</TD></TR></TABLE>`
@@ -274,10 +277,10 @@ export class DotGraph {
         let state = this.renderStateLabel(rel.state)
         let graph_lbl 
         let color 
-        if (graph === this.__client) {
+        if (this.__client !== undefined && graph.id === this.__client.id) {
             graph_lbl = ``
             color = DotGraph.CLIENT_COLOR
-        } else if (graph === this.__callee) {
+        } else if (this.__callee !== undefined && graph.id === this.__callee.id) {
             graph_lbl = ``
             color = DotGraph.CALLEE_COLOR
         } else {
@@ -296,17 +299,17 @@ export class DotGraph {
         }
     }
 
-    private storeNodes(nodes: Array<Node>): string {
+    private storeNodes(nodes: Array<NodeClass>): string {
         return nodes.map(node => {
             let repr: string
             let withoutStateMarkers = (this.__state_map.size === 1)
             let extraSpace = withoutStateMarkers ? `` : ` `
-            if (isRef(node.type)) {
+            if (isRef(node.type) && !isNull(node)) {
                 // this is a graph node
-                repr = node.repr(true, true, withoutStateMarkers, true)
+                repr = node.repr(true, true, withoutStateMarkers, true, true)
             } else {
                 // not a graph node
-                repr = `${node.repr(true, true, withoutStateMarkers, true)}${extraSpace} = ${this.renderNodeValue(node)}`
+                repr = `${node.repr(true, true, withoutStateMarkers, true, true)}${extraSpace} = ${this.renderNodeValue(node)}`
             }
 
             return `<TR><TD align="text" PORT="Local_N${node.id}">` + 
@@ -314,7 +317,7 @@ export class DotGraph {
         }).join('\n\t\t') + '\n'
     }
 
-    private renderLocalStore(nodes: Array<Node>): string {
+    private renderLocalStore(nodes: Array<NodeClass>): string {
 
         let table = `<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">\n` +
                     `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>Local </B></FONT></TD></TR>\n` + 
@@ -408,18 +411,9 @@ export class DotGraph {
         
         
         // render the local store
-        let local_refs = model.graphNodes.filter(n => n.isLocal)
-        let local_scalar_nodes = model.scalarNodes.filter(n => n.isLocal)
-        let nodes_worth_rendering = local_scalar_nodes.concat(local_refs).filter(node => {
-            if (node.states.length === 0) {
-                // This noe belongs to all states
-                return true
-            } else {
-                // This node is alive in a subset of all program states
-                let activeStates = node.states.filter(state => this.__state_map.has(state.nameStr()))
-                return activeStates.length > 0
-            }
-        })
+        let local_refs = model.graphNodes.filter(n => n.isLocal())
+        let local_scalar_nodes = model.scalarNodes.filter(n => n.isLocal())
+        let nodes_worth_rendering = local_scalar_nodes.concat(local_refs)
         let store = this.renderLocalStore(nodes_worth_rendering)
         let refs = this.renderRefs(local_refs.filter(n => !n.isNull))
         

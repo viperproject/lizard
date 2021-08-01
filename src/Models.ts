@@ -103,7 +103,7 @@ export function isRef(type: ViperType): boolean {
     return type.typename === 'Ref'
 }
 
-export function isNull(node: Node): boolean {
+export function isNull(node: NodeClass): boolean {
     return node.type.typename === 'Ref' && (<GraphNode> node).isNull
 }
 
@@ -152,79 +152,177 @@ export class PolymorphicTypes {
     }
 }
 
+export function viperTypeParser(typename: string) {
+    let type: ViperType
+    if (typename === 'Ref') {
+        type = PrimitiveTypes.Ref
+    } else if (typename === 'Set[Ref]') {
+        type = PolymorphicTypes.Set(PrimitiveTypes.Ref)
+    } else if (typename === 'Int') {
+        type = PrimitiveTypes.Int
+    } else if (typename === 'Bool') {
+        type = PrimitiveTypes.Bool
+    } else if (typename === 'Perm') {
+        type = PrimitiveTypes.Perm
+    } else {
+        let m = typename.match(/^Other\[(.*)\]$/)
+        if (m === null || m === undefined || !Array.isArray(m) || m.length !== 2) {
+            throw `cannot parse typename ${typename}`
+        }
+        type = PolymorphicTypes.Other(m[1])
+    }
+    return type 
+}
+
 
 // TODO: support other types e.g. Maps, Multisets, etc. 
 
-export class Node {
+export class Atom {
     /** This dynamic field enables JSONFormatter to pretty pront the node. */
     private _: string 
 
-    public repr(withoutType=false, withoutValue=false, withoutState=false, html=false): string {
-        let readable_name = Array.isArray(this.aliases) ? `${this.aliases.join(' = ')}` : this.aliases
-        let val = withoutValue ? `` : ` = ${this.val}`
-        
+    public name(withoutState=false, html=false): string {
+        if (withoutState) {
+            return this.proto
+        }
+
         let state = this.states.map(s => s.nameStr()).join('/')
         if (state !== '' && html) {
             state = `<SUB><FONT POINT-SIZE="10">${state}</FONT></SUB>`
         } else if (state !== '') {
             state = `@${state}`
         }
-        if (withoutState) {
-            state = ``
-        }
+        
+        return `${this.proto}${state}`
+    }
 
-        if (!withoutType && this.type) {
-            return `${readable_name}${state}: ${this.type.typename}${val}`
+    public repr(withoutType=false, withoutValue=false, withoutState=false, html=false): string { 
+        let readable_name = this.name(withoutState, html)
+        let val = withoutValue ? `` : ` = ${this.val}`
+
+        if (!withoutType) {
+            return `${readable_name}: ${this.type.typename}${val}`
         } else {
-            return `${readable_name}${state}${val}`
+            return `${readable_name}${val}`
         }
     }
-    constructor(public aliases: Array<string>,          // e.g. "X@7@12" or ["$FOOTPRINT@0@12", "$FOOTPRINT@1@12"]
-                public type: ViperType,                 // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
+    constructor(readonly type: ViperType,                 // e.g. "Ref" (undefined for internal values for which we do not know the exact type)
                 readonly id: number,                    // 0, 1, 2, ...
-                public val: string,                     // e.g. "$Ref!val!0"
-                readonly isLocal: boolean,             // whether this ndoe is refer to from the program store
-                public proto: Array<string>, 
-                public states: Array<State> = []) { // e.g. "X"
+                readonly val: string,                     // e.g. "$Ref!val!0"
+                readonly isLocal: boolean,              // whether this ndoe is refer to from the program store
+                readonly proto: string, 
+                readonly states: Array<State> = []) { // e.g. "X"
     
         this._ = this.repr()
-        // A node's pretty representation is computed dynamically since the fields are mutable. 
-        Object.defineProperty(this, '_', {
-            get: function() {
-                return this.repr()
+    }
+}
+
+export class NodeClass {
+    public repr(withoutType=false, withoutValue=false, withoutState=false, onlyLocal=false, html=false): string {
+        let readable_name = this.aliases.filter(a => onlyLocal ? a.isLocal : true).map(a => `${a.name(withoutState, html)}`).join('=')
+        let val = withoutValue ? `` : ` = ${this.val}`
+        if (!withoutType) {
+            return `${readable_name}: ${this.type.typename}${val}`
+        } else {
+            return `${readable_name}${val}`
+        }
+    }
+    constructor(readonly id: number, 
+                readonly val: string, 
+                readonly type: ViperType,
+                public aliases: Array<Atom>) {}            
+            
+    protected copy(aliases: Array<Atom> | undefined = undefined): NodeClass {
+        aliases = (aliases === undefined) ? Array.from(this.aliases) : aliases
+        return new NodeClass(this.id, this.val, this.type, aliases)
+    }
+
+    public project(stateHashes: Set<string>): NodeClass | undefined {
+        let activeAliases = this.aliases.filter(alias => {
+            if (alias.states.length === 0) {
+                // This atom is active in all states; keep it
+                return true
+            } else {
+                let activeStates = alias.states.filter(state => stateHashes.has(state.nameStr()))
+                if (activeStates.length === 0) {
+                    // this atom is not active in any of the active states; drop it
+                    return false
+                } else {
+                    // this atom is active in some of the active states; project it
+                    return new Atom(alias.type, alias.id, alias.val, alias.isLocal, alias.proto, activeStates)
+                }
             }
         })
+        if (activeAliases.length === 0) {
+            return undefined
+        } else {
+            return this.copy(activeAliases)
+        }
+    }
+
+    public isLocal(): boolean {
+        return this.aliases.find(a => a.isLocal) !== undefined
     }
 }
 
-export class GraphNode extends Node {
-    public fields: Array<Relation> = []
-
-    constructor(public aliases: Array<string>,
-                public isNull: boolean,
-                readonly id: number,
-                public val: string,
-                readonly isLocal: boolean,
-                public proto: Array<string> = [], 
-                public states: Array<State> = []) {
+export class GraphNode extends NodeClass {
+    
+    constructor(readonly id: number, 
+                readonly val: string,
+                readonly isNull: boolean,
+                readonly aliases: Array<Atom>,
+                public fields: Array<Relation> = new Array()) {
         
-        super(aliases, PrimitiveTypes.Ref, id, val, isLocal, proto, states)
+        super(id, val, PrimitiveTypes.Ref, aliases)
+    }
+
+    protected override copy(aliases: Array<Atom> | undefined = undefined): GraphNode {
+        aliases = (aliases === undefined) ? Array.from(this.aliases) : aliases
+        return new GraphNode(this.id, this.val, this.isNull, aliases, Array.from(this.fields))
+    }
+    
+    public static from(nc: NodeClass, isNull=false): GraphNode {
+        if (isRef(nc.type)) {
+            return new GraphNode(nc.id, nc.val, isNull, nc.aliases)
+        } else {
+            throw `cannot cast node class of type ${nc.type.typename} to GraphNode`
+        }
     }
 }
 
-export class Graph extends Node {
+export class Graph extends NodeClass {
 
-    private readonly nodes: Array<GraphNode> = []
-    private readonly statuses: {[NodeId: number]: Status} = {}
-
-    constructor(public aliases: Array<string>, 
-                readonly id: number, 
+    constructor(readonly id: number,
                 readonly val: string, 
-                readonly isLocal: boolean,
-                public proto: Array<string> = [], 
-                public states: Array<State> = []) {
+                readonly aliases: Array<Atom> = [],
+                private nodes: Array<GraphNode> = [],
+                private statuses: {[NodeId: number]: Status} = {}) {
 
-        super(aliases, PolymorphicTypes.Set(PrimitiveTypes.Ref), id, val, isLocal, proto, states)
+        super(id, val, PolymorphicTypes.Set(PrimitiveTypes.Ref), aliases)
+    }
+
+    protected override copy(aliases: Array<Atom> | undefined = undefined): Graph {
+        aliases = (aliases === undefined) ? Array.from(this.aliases) : aliases
+        return new Graph(this.id, this.val, aliases, Array.from(this.nodes), Object.assign({}, this.statuses))
+    }
+
+    public override project(stateHashes: Set<string>, activeNodeIds: Set<number> = new Set()): Graph | undefined {
+        let proj = super.project(stateHashes)
+        if (proj === undefined) {
+            return undefined
+        } else {
+            let projectedGraph = (<Graph> <unknown> proj)
+            projectedGraph.nodes = this.nodes.filter(node => activeNodeIds.has(node.id))
+            return projectedGraph
+        }
+    }
+
+    public static from(nc: NodeClass): Graph {
+        if (isSetOfRefs(nc.type)) {
+            return new Graph(nc.id, nc.val, nc.aliases)
+        } else {
+            throw `cannot cast node class of type ${nc.type.typename} to Graph`
+        }
     }
 
     public addNode(node: GraphNode, status: Status): void {
@@ -305,7 +403,7 @@ export class State {
 
     constructor(readonly names: Array<string>,  // e.g. l0, l1, ...
                 readonly innervals: Array<string>, 
-                readonly aliases: Array<string>,
+                public aliases: Array<string>,
                 readonly localStoreHash: string | undefined = undefined) { // e.g. Heap@1, PostHeap@@2, etc.
         
         Object.defineProperty(this, 'name', {
@@ -346,37 +444,120 @@ export class GraphModel {
         public footprints: {'client'?: Graph, 'callee'?: Graph} = {},
 
         public graphNodes: Array<GraphNode> = [],
-        public scalarNodes: Array<Node> = [],
+        public scalarNodes: Array<NodeClass> = [],
 
         public fields: Array<Relation> = [],
         public reach: Array<LocalRelation> = [],
 
         public equivalence_classes: EquivClasses = new EquivClasses()) {}
+
 }
 
 export class EquivClasses {
     
     // mapping keys to nodes
     private __buf: { 
-        [Key: string]: Array<Node>,
+        [Key: string]: Array<Atom>,
     } = {}
 
-    public static key(innerval: string, states: Array<State>, type: ViperType): string {
-        return `${innerval}@[${states.map(s => s.nameStr()).join('/')}]:${type.typename}`
+    static __keySep = '///'
+
+    public static key(innerval: string, type: ViperType): string {
+        return `${innerval}${EquivClasses.__keySep}${type.typename}`
     }
 
-    public has(innerval: string, states: Array<State>, type: ViperType): boolean {
-        let key = EquivClasses.key(innerval, states, type)
+    private static keyToValueType(key: string): [string, ViperType] {
+        let pair = key.split(EquivClasses.__keySep)
+        if (pair.length !== 2) {
+            throw `invalid EquivClasses key: ${key}`
+        }
+        let innerval = pair[0]
+        let typename = pair[1]
+        let type = viperTypeParser(typename)
+        return [innerval, type]
+    }
+
+    public has(innerval: string, type: ViperType): boolean {
+        let key = EquivClasses.key(innerval, type)
         return this.__buf.hasOwnProperty(key)
     }
 
-    public get(innerval: string, states: Array<State>, type: ViperType): Array<Node> {
-        let key = EquivClasses.key(innerval, states, type)
+    public get(innerval: string, type: ViperType): Array<Atom> {
+        let key = EquivClasses.key(innerval, type)
         return this.__buf[key]
     }
 
-    public set(innerval: string, states: Array<State>, type: ViperType, nodes: Array<Node>): void {
-        let key = EquivClasses.key(innerval, states, type)
+    public add(innerval: string, type: ViperType, node: Atom): void {
+        let key = EquivClasses.key(innerval, type)
+        if (this.__buf.hasOwnProperty(key)) {
+            this.__buf[key].push(node)
+        } else {
+            this.__buf[key] = new Array(node)
+        }
+    }
+
+    public set(innerval: string, type: ViperType, nodes: Array<Atom>): void {
+        let key = EquivClasses.key(innerval, type)
         this.__buf[key] = nodes
+    }
+
+    public toNodeClassArray(idGen: () => number): Array<NodeClass> {
+        return Object.entries(this.__buf).map(pair => {
+            let key = pair[0]
+            let aliases = pair[1]
+            let [value, type] = EquivClasses.keyToValueType(key)
+            return new NodeClass(idGen(), value, type, aliases)
+        })
+    }
+
+    public static from(atoms: Array<Atom>): EquivClasses {
+        let eq = new EquivClasses()
+        atoms.forEach(atom => eq.add(atom.val, atom.type, atom))
+        return eq
+    }
+}
+
+export class NodeSet {
+    private __ec =  new EquivClasses()
+    private __ns = new Map<string, NodeClass>()
+
+    public getNodeClasses(): Array<NodeClass> {
+        return Array.from(this.__ns.values())
+    }
+    
+    public has(innerval: string, type: ViperType): boolean {
+        return this.__ns.has(EquivClasses.key(innerval, type))
+    }
+
+    public get(innerval: string, type: ViperType): NodeClass | undefined {
+        return this.__ns.get(EquivClasses.key(innerval, type))
+    }
+
+    public getNode(innerval: string, type: ViperType): NodeClass | undefined {
+        let res = this.__ns.get(EquivClasses.key(innerval, type))
+        return res
+    }
+
+    public add(node: NodeClass): void {
+        this.__ns.set(EquivClasses.key(node.val, node.type), node)
+        this.__ec.set(node.val, node.type, node.aliases)
+    }
+
+    public merge(nodes: Array<NodeClass>): Array<NodeClass> {
+        let newNodes = new Array<NodeClass>()
+        nodes.forEach(node => {
+            if (this.has(node.val, node.type)) {
+                // Matches exisitng node class ==> merge
+                let existingClass = this.get(node.val, node.type)!
+                let extendedAliases = Array.from(new Set(existingClass.aliases.concat(node.aliases)))
+                this.__ec.set(node.val, node.type, extendedAliases)
+                existingClass.aliases = extendedAliases
+            } else {
+                // Does not match any existing class ==> add all its aliases and save
+                this.add(node)
+                newNodes.push(node)
+            }
+        })
+        return newNodes
     }
 }
