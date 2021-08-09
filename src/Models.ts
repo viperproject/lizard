@@ -1,3 +1,5 @@
+import { collect } from "./tools"
+
 // Used to indicate that a partial model does not specify a value for some cases in a function interpretation. 
 export type SmtBool = 'unspecified' | 'true' | 'false'
 
@@ -219,7 +221,16 @@ export class Atom {
 
 export class NodeClass {
     public repr(withoutType=false, withoutValue=false, withoutState=false, onlyLocal=false, html=false): string {
-        let readable_name = this.aliases.filter(a => onlyLocal ? a.isLocal : true).map(a => `${a.name(withoutState, html)}`).join('=')
+        let readable_name_list = 
+            this.aliases
+                .filter(a => onlyLocal ? a.isLocal : true)
+                .map(a => `${a.name(withoutState, html)}`)
+        let readable_name: string
+        if (withoutState) {
+            readable_name = Array.from(new Set(readable_name_list)).sort((a,b) => a.localeCompare(b)).join('=')
+        } else {
+            readable_name = readable_name_list.sort((a,b) => a.localeCompare(b)).join('=')
+        }
         let val = withoutValue ? `` : ` = ${this.val}`
         if (!withoutType) {
             return `${readable_name}: ${this.type.typename}${val}`
@@ -280,6 +291,10 @@ export class GraphNode extends NodeClass {
         aliases = (aliases === undefined) ? Array.from(this.aliases) : aliases
         return new GraphNode(this.id, this.val, this.isNull, aliases, Array.from(this.fields))
     }
+
+    public override project(stateHashes: Set<string>): GraphNode | undefined {
+        return <GraphNode | undefined> super.project(stateHashes)
+    }
     
     public static from(nc: NodeClass, isNull=false): GraphNode {
         if (isRef(nc.type)) {
@@ -306,13 +321,13 @@ export class Graph extends NodeClass {
         return new Graph(this.id, this.val, aliases, Array.from(this.nodes), Object.assign({}, this.statuses))
     }
 
-    public override project(stateHashes: Set<string>, activeNodeIds: Set<number> = new Set()): Graph | undefined {
+    public override project(stateHashes: Set<string>): Graph | undefined {
         let proj = super.project(stateHashes)
         if (proj === undefined) {
             return undefined
         } else {
             let projectedGraph = (<Graph> <unknown> proj)
-            projectedGraph.nodes = this.nodes.filter(node => activeNodeIds.has(node.id))
+            projectedGraph.nodes = this.nodes.flatMap(node => collect(node.project(stateHashes)))
             return projectedGraph
         }
     }
@@ -434,6 +449,10 @@ export class State {
             return `${this.nameStr()}///${this.localStoreHash}`
         }
     }
+
+    public isStrictlyPreceding(other: State): boolean {
+        return this.nameStr().localeCompare(other.nameStr()) < 0
+    }
 }
 
 export class GraphModel {
@@ -441,7 +460,7 @@ export class GraphModel {
         public states: Array<State> = [], 
         public graphs: Array<Graph> = [],
 
-        public footprints: {'client'?: Graph, 'callee'?: Graph} = {},
+        public footprints = {'client': new Array<Graph>(), 'callee': new Array<Graph>()},
 
         public graphNodes: Array<GraphNode> = [],
         public scalarNodes: Array<NodeClass> = [],

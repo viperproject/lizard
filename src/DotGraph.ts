@@ -1,4 +1,4 @@
-import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Atom, Relation, State, Status, NodeClass } from "./Models";
+import { Graph, GraphModel, GraphNode, isNull, isRef, LocalRelation, Atom, Relation, State, Status, NodeClass } from "./Models"
 
 export interface RenderOpts {
     is_carbon: boolean,
@@ -21,6 +21,7 @@ export class DotGraph {
     private static CLIENT_COLOR = `#0000ff5f`
     private static CALLEE_COLOR = `#E445005f`
 
+    private __rendered_node_ids = new Set<number>()
     private __state_map = new Map<string, State>()
     private __graph_map = new Map<number, Graph>()
     private __client: Graph | undefined
@@ -82,14 +83,14 @@ export class DotGraph {
     private graphPreamble(): string {
         let rankdir = this.opts.rankdir_lr ? ` rankdir="LR" ` : ``
         let nodesep = this.opts.rankdir_lr ? ` nodesep=0.5 ` : ` nodesep=0.5 `
-        return `graph [outputorder="nodesfirst" label="" fontname="Helvetica" ${nodesep} ranksep=0.5 ${rankdir}];`
+        return `graph [outputorder="nodesfirst" label="" fontname="Helvetica" ${nodesep} ranksep=0.5 ${rankdir}]`
     }
     private clusterPreamble(color: string, bgcolor: string): string { 
-        return `graph [labelloc="t" style="rounded" fontname="Helvetica" color="${color}" bgcolor="${bgcolor}" margin=18];`
+        return `graph [labelloc="t" style="rounded" fontname="Helvetica" color="${color}" bgcolor="${bgcolor}" margin=18]`
     }
     private nodePreamble(): string {
         let margin = this.opts.dotnodes ? '0.03' : '0.05'
-        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=${margin}];`
+        return `node [height=0 width=0 fontname="Helvetica" shape="none" margin=${margin}]`
     }
 
     private edgePreamble(): string {
@@ -188,13 +189,14 @@ export class DotGraph {
                     `\t\t` + this.nodeFields(node) + 
                     `\t\t</TABLE>`
         }
-        return `"N${node.id}" [${this.nodeSettings(node)} label=<${table}> ];`
+        this.__rendered_node_ids.add(node.id)
+        return `"N${node.id}" [${this.nodeSettings(node)} label=<${table}> ]`
     }
 
     private renderGraph(graph: Graph): string {
         return `subgraph cluster_${graph.id} {\n` + 
                 `\t\t${this.clusterPreamble(DotGraph.REACH_COLOR, DotGraph.GRAPH_BGCOLOR)}\n` + 
-                `\t\tlabel="${graph.repr(true, true)} = ${this.renderNodeValue(graph)}";\n` + 
+                `\t\tlabel="${graph.repr(true, true)} = ${this.renderNodeValue(graph)}"\n` + 
                 `\t${graph.mapNodes(node => this.renderNode(node, graph)).join('\n\t')}\n\t}`
     }
 
@@ -203,7 +205,7 @@ export class DotGraph {
         let state = this.renderStateLabel(callee.aliases[0].states)
         return `subgraph cluster_${callee.id} {\n` + 
                `\t\t${this.clusterPreamble(DotGraph.CALLEE_COLOR, DotGraph.CALLEE_BGCOLOR)}\n` + 
-               `\t\tlabel="Callee${state} = ${this.renderNodeValue(callee)}";\n` + 
+               `\t\tlabel=<Callee${state} = ${this.renderNodeValue(callee)}>\n` + 
                `\t${callee.mapNodes(node => this.renderNode(node, callee)).join('\n\t')}\n\t}`
     }
 
@@ -227,7 +229,7 @@ export class DotGraph {
 
         return `subgraph cluster_${client.id} {\n` + 
                 `\t\t${this.clusterPreamble(DotGraph.CLIENT_COLOR, DotGraph.CLIENT_BGCOLOR)}\n` + 
-                `\t\tlabel="Client${state} = ${this.renderNodeValue(client)}";\n` + 
+                `\t\tlabel=<Client${state} = ${this.renderNodeValue(client)}>\n` + 
                 `\t${callee_str}\n` + 
                 `\t${frame_str}\n\t}`
     }
@@ -258,9 +260,9 @@ export class DotGraph {
             return `N${pred.id} -> N${succ.id} [label=<${label}> ${status}]`
         } else if (pred.id === succ.id && this.opts.rankdir_lr) {
             // special case for self-edges
-            return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD":e [${status}];`
+            return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD":e [${status}]`
         } else {
-            return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD" [${status}];`
+            return `N${pred.id}:"${field.name}@${field.state.nameStr()}":e -> N${succ.id}:"$HEAD" [${status}]`
         }
     }
 
@@ -293,9 +295,9 @@ export class DotGraph {
         // let constrant = rel.name === 'P' ? `true` : `false`
         let constrant = `false`
         if (is_mutual) {
-            return `N${pred.id} -> N${succ.id} [label=${label} ${status} color="${color}" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ];`
+            return `N${pred.id} -> N${succ.id} [label=${label} ${status} color="${color}" penwidth=2 ${dashed} arrowhead="none" arrowtail="none" dir="both" constraint=${constrant} ]`
         } else {
-            return `N${pred.id} -> N${succ.id} [label=${label} ${status} color="${color}" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ];`
+            return `N${pred.id} -> N${succ.id} [label=${label} ${status} color="${color}" penwidth=2 ${dashed} arrowhead="open" arrowsize=0.8 constraint=${constrant} ]`
         }
     }
 
@@ -323,14 +325,14 @@ export class DotGraph {
                     `\t\t<TR><TD BGCOLOR="black" PORT="$HEAD"><FONT COLOR="white"><B>Local </B></FONT></TD></TR>\n` + 
                     `\t\t` + this.storeNodes(nodes) + 
                     `\t\t</TABLE>`
-        return `"$Store" [ label=<${table}> ];`
+        return `"$Store" [ label=<${table}> ]`
     }
 
     private renderRefs(graph_nodes: Array<GraphNode>): string {
         let constraint = this.opts.rankdir_lr ? `` : `constraint=false `
         let port = this.opts.dotnodes ? `` : `:"$HEAD"`
         return graph_nodes.map(ref_node => 
-            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}${port} [${constraint}style=dotted];`).join('\n\t')
+            `"$Store":Local_N${ref_node.id}:e -> N${ref_node.id}${port} [${constraint}style=dotted]`).join('\n\t')
     }
 
     private renderReachRelations(rels: Array<LocalRelation>): string {
@@ -358,6 +360,38 @@ export class DotGraph {
         return res
     }
 
+    private getLatestFootprint(graphs: Array<Graph>): Graph | undefined {
+        if (graphs.length < 1) {
+            return undefined
+        }
+        if (graphs.length === 1) {
+            return graphs[0]
+        }
+        let latest = graphs[0]
+        let latestState: State = latest.aliases[0].states[0]
+        graphs.forEach(graph => {
+            // find this graph's last state
+            let lastGraphState: State = graph.aliases[0].states[0]
+            graph.aliases.forEach(atom => {
+                // find this atom's latest state
+                let latestAtomState: State = atom.states[0]
+                atom.states.forEach(state => {
+                    if (latestAtomState.isStrictlyPreceding(state)) {
+                        latestAtomState = state
+                    }
+                })
+                if (lastGraphState.isStrictlyPreceding(latestAtomState)) {
+                    lastGraphState = latestAtomState
+                }
+            })
+            if (latestState.isStrictlyPreceding(lastGraphState)) {
+                latestState = lastGraphState
+                latest = graph
+            }
+        })
+        return latest
+    }
+
     private __buffer: string
 
     constructor(public model: GraphModel, 
@@ -376,8 +410,8 @@ export class DotGraph {
 
         // render the heap graph
         // let graphs = model.graphs.map(graph => this.renderGraph(graph)).join('\n\t')
-        this.__client = model.footprints.client
-        this.__callee = model.footprints.callee
+        this.__client = this.getLatestFootprint(model.footprints.client)
+        this.__callee = this.getLatestFootprint(model.footprints.callee)
         let footprint_ids = new Set<number>()
         let graphs = ``
         if (this.__client !== undefined && this.__callee !== undefined && this.__client !== this.__callee) {
@@ -392,9 +426,10 @@ export class DotGraph {
             footprint_ids.add(this.__callee.id)
         }
 
-        let nodes_in_graphs = new Set(model.graphs.flatMap(graph => graph.getNodesArray()))
         let outer_nodes = model.graphNodes.filter(node => 
-            !node.isNull && !nodes_in_graphs.has(node)).map(node => this.renderNode(node)).join('\n\t')
+            !node.isNull && !this.__rendered_node_ids.has(node.id)).map(node => 
+                this.renderNode(node)).join('\n\t')
+                
         let edges = model.fields.filter(field => 
             this.isFieldRef(field) && !this.isFieldValueNull(field)).map(field => 
                 this.renderFieldRelation(field)).join('\n\t')

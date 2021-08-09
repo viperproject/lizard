@@ -1,6 +1,7 @@
 import { Logger } from "./logger"
-import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Atom, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool, castToMapEntry, NodeClass, NodeSet } from "./Models"
+import { PolymorphicTypes, getConstantEntryValue, ApplicationEntry, Model, Atom, State, Relation, EquivClasses, GraphModel, ConstantEntry, ModelEntry, MapEntry, Graph, GraphNode, isRef, isSetOfRefs, ViperType, LocalRelation, isInt, isBool, isPerm, isNull, Status, SmtBool, castToSmtBool, castToMapEntry, NodeClass, NodeSet, PrimitiveTypes } from "./Models"
 import { Query } from "./Query"
+import { collect } from "./tools"
 import { Type, TypedViperDefinition, ViperDefinition, ViperLocation } from "./ViperAST"
 import { ViperTypesProvider } from "./ViperTypesProvider"
 
@@ -11,7 +12,6 @@ export interface SessionOpts {
 
 const wildcard = undefined
 
-const collect = (xs: any) => (xs===undefined) ? [] : [xs]
 
 export class Session {
     public programDefinitions: Array<ViperDefinition> | undefined = undefined
@@ -65,7 +65,8 @@ export class Session {
             }
         }
         
-        return new Atom(type, id, innerval, is_local, name, states)
+        let protoName = this.innerToProto(name)
+        return new Atom(type, id, innerval, is_local, protoName, states)
     }
 
     // static myRelations = ['[2]', '[3]', '[4:=]', 
@@ -290,7 +291,9 @@ export class Session {
             }))
 
         if (atoms.length < names.length) {
-            Logger.error(`could not find some atom definitions in raw model`)
+            Logger.error(`could not find some atom definitions in raw model;\n` + 
+                         ` names: ${names.join(', ')}\n` + 
+                         ` atoms: ${atoms.map(a => a.repr()).join(', ')}`)
         }
 
         return atoms
@@ -351,7 +354,9 @@ export class Session {
         // Deduce relations for each field, node, state
         let field_relations = useful_fields.flatMap(fname => 
             this.states!.flatMap(state => {
-                let rels = nodes.filter(node => node.aliases.find(alias => alias.states.length === 0 || alias.states.includes(state)) !== undefined).flatMap(node => {
+                let activeNodes = nodes.filter(node => 
+                    node.aliases.find(atom => atom.states.length === 0 || atom.states.includes(state)) !== undefined)
+                let rels = activeNodes.flatMap(node => {
                     let state_to_rels = this.collectFieldValueInfo(node, fname)
                     if (state.innervals.length !== 1) {
                         throw `state innervals must be unique (${state.nameStr()} has ${state.innervals.join(', ')})`
@@ -407,8 +412,7 @@ export class Session {
     private graph_hash = new Map<number, Graph>()
 
     private graphs = new Array<Graph>()
-    private latest_client_footprint: Graph | undefined = undefined
-    private latest_callee_footprint: Graph | undefined = undefined
+    private footprints: {'client': Array<Graph>, 'callee': Array<Graph>} | undefined = undefined
     
     private graph_nodes = new Array<GraphNode>()
     private scalar_nodes = new Array<NodeClass>()
@@ -450,7 +454,12 @@ export class Session {
         let new_graph_nodes = new Array<GraphNode>()
         new_nonaliasing_nodes.forEach(nodeClass => {
             if (nodeClass.type && isRef(nodeClass.type)) {
-                let graphNode = GraphNode.from(nodeClass, this.isValNull(nodeClass.val))
+                let isNull = this.isValNull(nodeClass.val)
+                let graphNode = GraphNode.from(nodeClass, isNull)
+                if (isNull) {
+                    let nullAtom = this.mkNullAtom()
+                    graphNode.aliases.push(nullAtom)
+                }
                 new_graph_nodes.push(graphNode)
                 if (this.node_hash.has(graphNode.id)) {
                     throw `saturation error: node with ID ${graphNode.id} is already present in the node hash`
@@ -489,64 +498,13 @@ export class Session {
         }
     }
 
-    private static extractFootprints(graphs: Array<Graph>): {callee?: Graph, client?: Graph} {
-        let result: {callee?: Graph, client?: Graph} = new Object()
-        let client_footprint_max_index = -Infinity
-        let callee_footprints_max_index = -Infinity
+    private static extractFootprints(graphs: Array<Graph>): {callee: Array<Graph>, client: Array<Graph>} {
+        let result = {callee: new Array<Graph>(), client: new Array<Graph>()}
         graphs.forEach(graph => {
-            let is_client_footprint_proto = false
-            let is_callee_footprint_proto = false
-            let highest_client_footprint_index: number = -Infinity
-            let highest_callee_footprint_index: number = -Infinity
-
-            graph.aliases.forEach(alias => {
-                // Handle the case in which there are several aliasing node sets 
-                //  that potentially represent the footprints
-                let {proto, suffix, index} = Session.innerNameParser(alias.proto)
-                if (proto === 'G') {
-                    is_client_footprint_proto = true
-                    if (index === undefined) {
-                        highest_client_footprint_index = +Infinity
-                    } else if (highest_client_footprint_index < index) {
-                        highest_client_footprint_index = index
-                    }
-                } else if (proto === 'H') {
-                    is_callee_footprint_proto = true
-                    if (index === undefined) {
-                        highest_callee_footprint_index = +Infinity
-                    } else if (highest_callee_footprint_index < index) {
-                        highest_callee_footprint_index = index
-                    }
-                }
-            })
-            // Maximize the index among all node sets whose proto is a footprint 
-            //  (no index is better than all indices)
-            if (is_client_footprint_proto) {
-                if (highest_client_footprint_index === undefined && highest_client_footprint_index === +Infinity) {
-                    // choose the entry without index over all possible other entries
-                    // e.g. "G" rather than "G@1"
-                    client_footprint_max_index = +Infinity 
-                    result['client'] = graph
-
-                } else if (client_footprint_max_index < highest_client_footprint_index) {
-                    // choose the entry with the highest index
-                    // e.g. "G@1" rather than "G@0"
-                    client_footprint_max_index = highest_client_footprint_index
-                    result['client'] = graph
-                }
-            } else if (is_callee_footprint_proto) {
-                if (highest_callee_footprint_index === undefined && highest_callee_footprint_index === +Infinity) {
-                    // choose the entry without index over all possible other entries
-                    // e.g. "H" rather than "H@1"
-                    callee_footprints_max_index = +Infinity
-                    result['callee'] = graph
-
-                } else if (callee_footprints_max_index < highest_callee_footprint_index) {
-                    // choose the entry with the highest index
-                    // e.g. "H@1" rather than "H@0"
-                    callee_footprints_max_index = highest_callee_footprint_index 
-                    result['callee'] = graph
-                }
+            if (graph.aliases.find(a => a.proto === 'G') !== undefined) {
+                result.client.push(graph)
+            } else if (graph.aliases.find(a => a.proto === 'H') !== undefined) {
+                result.callee.push(graph)
             }
         })
         return result
@@ -683,8 +641,8 @@ export class Session {
             
         raw_reach_rels.forEach(rel => {
             let key = relkey(rel)
-            let graph = this.graph_hash.get(rel.graph_id)
-            if (graph === this.latest_client_footprint) {
+            let graph = this.graph_hash.get(rel.graph_id)!
+            if (this.footprints!.client.includes(graph)) {
                 if (rel.name === 'P') {
                     client_pos_reach.set(key, rel)
                 } else if (rel.name === '¬P') {
@@ -692,7 +650,7 @@ export class Session {
                 } else {
                     Logger.error(`unexpected relation name: ${rel.name} (expected 'P' or '¬P')`)
                 }
-            } else if (graph === this.latest_callee_footprint) {
+            } else if (this.footprints!.callee.includes(graph)) {
                 if (rel.name === 'P') {
                     callee_pos_reach.set(key, rel)
                 } else if (rel.name === '¬P') {
@@ -756,31 +714,27 @@ export class Session {
 
         Session.collectEquivClasses(starting_atoms, this.equiv_classes)  // optional
         let starting_nodes = this.mergeAliases(starting_atoms)
-        
+
         // 1. Process and Saturate! 
         this.produceGraphModelRec(starting_nodes)
         
         // 2. Extract latest footprints (possibly, aliasing groups of node sets)
-        let footprints = Session.extractFootprints(this.graphs)
-        this.latest_callee_footprint = footprints.callee
-        this.latest_client_footprint = footprints.client
+        this.footprints = Session.extractFootprints(this.graphs)
 
         // 3. Collect reachability information
         let non_null_nodes = this.graph_nodes.filter(n => !n.isNull)
         let raw_reach_rels = this.collectReach(non_null_nodes)
         
         // 4. Filter out redundant information
-        this.reach = this.filterReachabilityRelations(raw_reach_rels)
+        // this.reach = this.filterReachabilityRelations(raw_reach_rels)
+        this.reach = raw_reach_rels
 
         // 5. Complete model
         this.graphModel = 
             new GraphModel(
                 this.states!, 
                 Array.from(this.graphs), 
-                {
-                    'client': this.latest_client_footprint, 
-                    'callee': this.latest_callee_footprint
-                },
+                this.footprints,
                 this.graph_nodes, 
                 this.scalar_nodes, 
                 this.fields, 
@@ -796,13 +750,30 @@ export class Session {
         let selected_states = new Set<string>(query.states)
         let filtered_states = this.graphModel!.states.filter(state => selected_states.has(state.nameStr()))
         
-        let filtered_nodes = this.graphModel!.graphNodes.flatMap(n => collect(n.project(selected_states)))
-        let selected_node_ids = new Set(filtered_nodes.map(n => n.id))
+        let filtered_graphs = this.graphModel!.graphs.flatMap(g => collect(g.project(selected_states)))
+        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.nameStr()))
 
-        let filtered_graphs = this.graphModel!.graphs.flatMap(g => collect(g.project(selected_states, selected_node_ids)))
+        let filtered_nodes = new Map<number, GraphNode>()  // from node id to node
+        filtered_graphs.forEach(graph => 
+            graph.getNodesArray().forEach(node => {
+                if (!filtered_nodes.has(node.id)) {
+                    filtered_nodes.set(node.id, node)
+                }
+            }))
+        filtered_fields.forEach(field => {
+            if (!filtered_nodes.has(field.pred_id)) {
+                let projNode = this.getNodeById(field.pred_id).project(selected_states)!
+                filtered_nodes.set(projNode.id, projNode)
+            }
+            if (!filtered_nodes.has(field.succ_id)) {
+                let projNode = this.getNodeById(field.succ_id).project(selected_states)!
+                filtered_nodes.set(projNode.id, projNode)
+            }
+        })
+        let selected_node_ids = new Set(filtered_nodes.keys())
         let filtered_scalars = this.graphModel!.scalarNodes.flatMap(c => collect(c.project(selected_states)))
 
-        let filtered_fields = this.graphModel!.fields.filter(field => selected_states.has(field.state.nameStr()))
+        
         let filtered_reach = this.graphModel!.reach.filter(rel => {
             let isSelected = selected_states.has(rel.state.nameStr())
             let isGraphActive = filtered_graphs.map(g => g.id).includes(rel.graph_id)  // could be optimized
@@ -816,7 +787,7 @@ export class Session {
         this.latestQuery!.fields = filtered_fields
         this.latestQuery!.states = filtered_states
         this.latestQuery!.reach = filtered_reach
-        this.latestQuery!.graphNodes = filtered_nodes
+        this.latestQuery!.graphNodes = Array.from(filtered_nodes.values())
         this.latestQuery!.graphs = filtered_graphs
         this.latestQuery!.scalarNodes = filtered_scalars
         this.latestQuery!.footprints = Session.extractFootprints(filtered_graphs)
@@ -1104,6 +1075,10 @@ export class Session {
         let nullEntry = nullEntries.pop()![1]
         this.__nullInnerVal = getConstantEntryValue(nullEntry)
     }
+    private mkNullAtom(): Atom {
+        let nullAtom = this.mkAtom('null', this.__nullInnerVal!, false, PrimitiveTypes.Ref)
+        return nullAtom
+    }
 
     /** Backend-specific code */
 
@@ -1301,24 +1276,24 @@ export class Session {
                 })
             })
 
-            // 2.75. Merge states with the same innerval/localHash (each state may have only one innerval at this point)
-            let non_aliasing_states = new Map<string, State>()
-            Array.from(remapped_states.values()).forEach(state => {
-                let key1 = state.localStoreHash
-                let key = `${state.innervals[0]}_${key1}`
-                if (non_aliasing_states.has(key)) {
-                    let na_state = non_aliasing_states.get(key)!
-                    na_state.aliases.push(...state.aliases)
-                } else {
-                    non_aliasing_states.set(key, state)
-                }
-            })
+            // // 2.75. Merge states with the same innerval/localHash (each state may have only one innerval at this point)
+            // let non_aliasing_states = new Map<string, State>()
+            // Array.from(remapped_states.values()).forEach(state => {
+            //     let key1 = state.localStoreHash
+            //     let key = `${state.innervals[0]}_${key1}`
+            //     if (non_aliasing_states.has(key)) {
+            //         let na_state = non_aliasing_states.get(key)!
+            //         na_state.aliases.push(...state.aliases)
+            //     } else {
+            //         non_aliasing_states.set(key, state)
+            //     }
+            // })
 
             // 3. Merge states that have labels with the same innerval
             //   After this step, states may have multiple innervals for the first time. 
             let na_states = new Map<string, State>()  // maps labels (e.g. "l1" or "l0/l1/l2") to states
 
-            let potentially_aliasing_states = Array.from(non_aliasing_states.values())
+            let potentially_aliasing_states = Array.from(remapped_states.values())
             potentially_aliasing_states.forEach(state => {
                 let key = state.nameStr()
                 if (na_states.has(key)) {
