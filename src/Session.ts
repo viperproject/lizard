@@ -452,6 +452,7 @@ export class Session {
         // C. Group nodes by type: Ref, Set[Ref], Others
         //    Keep only the latest version of client and callee footprints
         let new_graph_nodes = new Array<GraphNode>()
+        let nullNode: GraphNode | undefined = undefined
         new_nonaliasing_nodes.forEach(nodeClass => {
             if (nodeClass.type && isRef(nodeClass.type)) {
                 let isNull = this.isValNull(nodeClass.val)
@@ -459,6 +460,7 @@ export class Session {
                 if (isNull) {
                     let nullAtom = this.mkNullAtom()
                     graphNode.aliases.push(nullAtom)
+                    nullNode = graphNode
                 }
                 new_graph_nodes.push(graphNode)
                 if (this.node_hash.has(graphNode.id)) {
@@ -476,6 +478,13 @@ export class Session {
                 this.scalar_nodes.push(nodeClass)
             }
         })
+
+        // Define Null Node
+        if (nullNode === undefined) {
+            nullNode = this.mkNullNode()
+            new_graph_nodes.push(nullNode)
+        } 
+
         this.graph_nodes.push(...new_graph_nodes)
 
         // D. Determine which Ref-based nodes belong to which graphs (i.e. Set[Ref]-based nodes)
@@ -760,14 +769,14 @@ export class Session {
                     filtered_nodes.set(node.id, node)
                 }
             }))
-        filtered_fields.forEach(field => {
-            if (!filtered_nodes.has(field.pred_id)) {
-                let projNode = this.getNodeById(field.pred_id).project(selected_states)!
-                filtered_nodes.set(projNode.id, projNode)
-            }
-            if (!filtered_nodes.has(field.succ_id)) {
-                let projNode = this.getNodeById(field.succ_id).project(selected_states)!
-                filtered_nodes.set(projNode.id, projNode)
+
+        // Add nodes that are not in a graph
+        this.graphModel!.graphNodes.forEach(node => {
+            if (!filtered_nodes.has(node.id)) {
+                let proj = node.project(selected_states)
+                if (proj !== undefined) {
+                    filtered_nodes.set(proj.id, proj)
+                }
             }
         })
         let selected_node_ids = new Set(filtered_nodes.keys())
@@ -1078,6 +1087,12 @@ export class Session {
     private mkNullAtom(): Atom {
         let nullAtom = this.mkAtom('null', this.__nullInnerVal!, false, PrimitiveTypes.Ref)
         return nullAtom
+    }
+
+    private mkNullNode(): GraphNode {
+        let nullAtom = this.mkNullAtom()
+        let nullNode = new GraphNode(this.freshNodeId(), this.__nullInnerVal!, true, [nullAtom], [])
+        return nullNode
     }
 
     /** Backend-specific code */
