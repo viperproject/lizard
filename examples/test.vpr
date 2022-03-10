@@ -1,0 +1,47 @@
+field NEXT: Ref
+field OTHER: Int
+field LEFT: Ref
+
+method test(FT: Set[Ref])
+    requires !(null in FT)
+
+    requires forall N:Ref :: { N.NEXT }{ N.OTHER }{ N.LEFT }
+        N in FT ==> acc(N.NEXT) && acc(N.OTHER) && acc(N.LEFT)
+
+    requires forall N:Ref, M:Ref :: { N in FT, M in FT }
+        N != M && N in FT && M in FT ==> N.OTHER != M.OTHER
+
+    
+    requires forall M:Ref :: { M.NEXT in FT }
+        M in FT && M.NEXT != null ==> 
+            M.NEXT in FT
+
+    requires forall ABC: Ref :: { ABC.LEFT } ABC in FT ==> !(ABC.LEFT in FT)
+{
+    var X: Ref 
+    assume X in FT && X.NEXT == null
+
+    
+    var Y: Ref 
+    assume Y in FT
+    
+    // X.NEXT := Y
+    // X.NEXT := Y
+    label l0
+    X.NEXT := Y
+    label l1
+
+    // assume exists K:Int :: { X.OTHER } X.OTHER == K && K > 0
+
+    var ZANZIBAR: Int 
+    assert Y.LEFT == X.NEXT
+    // assert ZANZIBAR + 2 != ZANZIBAR * ZANZIBAR -- weird
+    // assert -10050 <= ZANZIBAR && ZANZIBAR < 10
+    // assert Z > 0 ==> X.NEXT.NEXT in FT
+}
+
+// Heap = T@U!val!11
+// X = T@U!val!8
+// Y = T@U!val!12
+// Y.next [T@U!val!11] = "T@U!val!13"
+// null = "T@U!val!13"

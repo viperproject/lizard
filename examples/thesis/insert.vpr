@@ -1,0 +1,49 @@
+function $state(g: Set[Ref]): Map[Ref, Ref]
+    requires NODES(g, 1/2)
+    ensures domain(result) == g
+    ensures forall u:Ref :: 
+        { u.next }
+        { result[u] }  // needs to be triggered when the field is modified
+            u in domain(result) ==> result[u] == u.next
+
+
+define THIS_STATE_IS__l0 ($state(G) == l0())
+define THIS_STATE_IS__l1 ($state(G) == l1())
+define THIS_STATE_IS__l2 ($state(G) == l2())
+define THIS_STATE_IS__l3 ($state(G) == l3())
+
+domain $Label {
+    function l0(): Map[Ref, Ref]
+    function l1(): Map[Ref, Ref]
+    function l2(): Map[Ref, Ref]
+    function l3(): Map[Ref, Ref]
+}
+
+field next: Ref 
+
+define NODES(G, p)
+    !(null in G) && 
+    (forall QVAR_N: Ref :: 
+        { QVAR_N.next }
+			QVAR_N in G ==> acc(QVAR_N.next, p))
+
+
+method Insert(G: Set[Ref], hd: Ref, n: Ref)
+    requires hd in G && n in G
+    requires NODES(G, write)
+    // requires hd != n  //-- missing assertion 
+
+    ensures NODES(G, write)
+    ensures THIS_STATE_IS__l3 ==> n.next == old(hd.next)
+{ 
+    assume THIS_STATE_IS__l0
+
+    n.next := hd.next
+
+    assume THIS_STATE_IS__l1
+
+    hd.next := n
+
+    assume THIS_STATE_IS__l2
+}
+

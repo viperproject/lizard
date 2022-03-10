@@ -1,0 +1,133 @@
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/TrCloDomain.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/skolems.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/legoFraming.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/macros.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/memspecs.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/unary/_preambles/memspecs.vpr"
+
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/common/graph.vpr"
+
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/common/dag.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/unary/_preambles/dag.vpr"
+
+
+// import "/Users/wi/viper/viper_client/models/lizard.vpr"
+
+function $state(g: Set[Ref]): Map[Ref, Ref]
+    requires NODES(g, 1/2)
+    ensures domain(result) == g
+    ensures forall u:Ref :: 
+        { u.next }
+        { result[u] }  // needs to be triggered when the field is modified
+            u in domain(result) ==> result[u] == u.next
+
+domain $Label {
+    function l0(): Map[Ref, Ref]
+    function l1(): Map[Ref, Ref]
+    function l2(): Map[Ref, Ref]
+    function l3(): Map[Ref, Ref]
+    function l4(): Map[Ref, Ref]
+    function l5(): Map[Ref, Ref]
+    function l6(): Map[Ref, Ref]
+    function l7(): Map[Ref, Ref]
+    function l8(): Map[Ref, Ref]
+    function l9(): Map[Ref, Ref]
+
+    function $local$Y$0(): Ref
+    function $local$Y$1(): Ref
+    function $local$Y$2(): Ref
+    function $local$Y$3(): Ref
+    function $local$Y$4(): Ref
+    function $local$Y$5(): Ref
+    function $local$Y$6(): Ref
+    function $local$Y$7(): Ref
+    function $local$Y$8(): Ref
+    function $local$Y$9(): Ref
+
+    function $local$X$0(): Ref
+    function $local$X$1(): Ref
+    function $local$X$2(): Ref
+    function $local$X$3(): Ref
+    function $local$X$4(): Ref
+    function $local$X$5(): Ref
+    function $local$X$6(): Ref
+    function $local$X$7(): Ref
+    function $local$X$8(): Ref
+    function $local$X$9(): Ref
+
+    function $local$TMP$0(): Ref
+    function $local$TMP$1(): Ref
+    function $local$TMP$2(): Ref
+    function $local$TMP$3(): Ref
+    function $local$TMP$4(): Ref
+    function $local$TMP$5(): Ref
+    function $local$TMP$6(): Ref
+    function $local$TMP$7(): Ref
+    function $local$TMP$8(): Ref
+    function $local$TMP$9(): Ref
+}
+
+define THIS_STATE_IS__l1(X, Y)      ($state(G) == l1() && Y == $local$Y$1() && X == $local$X$1())
+define THIS_STATE_IS__l0(X, Y)      ($state(G) == l0() && Y == $local$Y$0() && X == $local$X$0())
+define THIS_STATE_IS__l2(X, Y, TMP) ($state(G) == l2() && Y == $local$Y$2() && X == $local$X$2() && TMP == $local$TMP$2())
+define THIS_STATE_IS__l3(X, Y, TMP) ($state(G) == l3() && Y == $local$Y$3() && X == $local$X$3() && TMP == $local$TMP$3())
+define THIS_STATE_IS__l4(X, Y, TMP) ($state(G) == l4() && Y == $local$Y$4() && X == $local$X$4() && TMP == $local$TMP$4())
+define THIS_STATE_IS__l5(X, Y, TMP) ($state(G) == l5() && Y == $local$Y$5() && X == $local$X$5() && TMP == $local$TMP$5())
+// define THIS_STATE_IS__l6(X, Y, TMP) ($state(G) == l6() && Y == $local$Y$6() && X == $local$X$6() && TMP == $local$TMP$6())
+// define THIS_STATE_IS__l7(X, Y, TMP) ($state(G) == l7() && Y == $local$Y$7() && X == $local$X$7() && TMP == $local$TMP$7())
+// define THIS_STATE_IS__l8(X, Y, TMP) ($state(G) == l8() && Y == $local$Y$8() && X == $local$X$8() && TMP == $local$TMP$8())
+// define THIS_STATE_IS__l9(X, Y, TMP) ($state(G) == l9() && Y == $local$Y$9() && X == $local$X$9() && TMP == $local$TMP$9())
+
+
+define __CONVEXITY_CHECKES false
+
+
+method reverse2(G: Set[Ref], XE: Ref) returns (Y: Ref)
+    requires DAG(G)
+    requires XE in G
+    requires forall N: Ref :: { P_(G, XE, N) } N in G ==> P_(G, XE, N)
+    requires CLOSED(G)
+
+    ensures DAG(G)
+    ensures  forall N: Ref :: { P_(G, Y, N) } N in G ==> P_(G, Y, N)
+    ensures CLOSED(G)
+{
+    var X: Ref := XE
+    Y := null
+    assume THIS_STATE_IS__l0(X, Y)
+    // assume forall n: Ref :: { n.next } n in G && n.next != null ==> n != n.next
+    while (X != null)
+        invariant DAG(G)
+        // invariant CLOSED(G)
+        invariant (Y != null ==> Y in G)
+        invariant (X != null ==> X in G)
+        invariant (Y == null ==> forall N: Ref :: { P_(G, X, N) } N in G ==> P_(G, X, N)) 
+        invariant (X == null ==> forall N: Ref :: { P_(G, Y, N) } N in G ==> P_(G, Y, N)) 
+        invariant (X != null && Y != null ==> forall N: Ref :: 
+                { P_(G, X, N) }{ P_(G, Y, N) } 
+                    N in G ==> P_(G, X, N) || P_(G, Y, N)) 
+        invariant THIS_STATE_IS__l1(X, Y) ==> (X != null && Y != null ==> forall N: Ref :: 
+                { P_(G, X, N) }{ P_(G, Y, N) }
+                    N in G ==> !P_(G, X, N) || !P_(G, Y, N))
+    {
+        var TMP: Ref := X.next
+
+        // assume THIS_STATE_IS__l2(X, Y, TMP)
+
+        // X.next := Y
+        unlink_DAG_next(G, X)
+        link_DAG_next(G, X, Y)
+
+        // assume THIS_STATE_IS__l3(X, Y, TMP)
+
+        Y := X
+        X := TMP
+        // assert false
+
+        assume THIS_STATE_IS__l4(X, Y, TMP)
+    }
+
+    // var N0: Ref
+    // assert N0 in G ==> P_(G, Y, N0)
+}
+

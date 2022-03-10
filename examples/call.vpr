@@ -1,0 +1,34 @@
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/TrCloDomain.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/skolems.vpr"
+import "/Users/wi/viper/viper_client/models/legoFraming2.0.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/macros.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/memspecs.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/unary/_preambles/memspecs.vpr"
+
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/common/graph.vpr"
+
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/common/dag.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/unary/_preambles/dag.vpr"
+
+function sub(G:Set[Ref]): Set[Ref]
+    requires DAG(G)
+    ensures result subset G
+    ensures ACYCLIC(result) && CLOSED(result)
+
+method client(G: Set[Ref], X:Ref, Y:Ref)
+    requires DAG(G)
+    requires X in G && Y in G && X.next == Y
+    // ensures DAG(G)
+{
+    var H:Set[Ref] := sub(G)
+    callee(H)
+    // assert X in G
+    assert X in H ==> !P_(G, X, Y) || !P_(G, Y, X)
+}
+
+method callee(H: Set[Ref])
+    requires DAG(H)
+    ensures DAG(H)
+{
+
+}

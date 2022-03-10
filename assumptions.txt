@@ -1,0 +1,30 @@
+Assumptions of the debugging technique
+
+DONE: 1. We are dealing with a failure to verify a single assertion
+
+DONE: 2. The program identifier names are chosen s.t. they do not collide with internal identifiers and are hence not renamed in the translation 
+
+DONE: 3. The relevant parts of the program are not optimized-out by the translation. For example: 
+
+method foo() { var bar:Int := 42; assert bar }
+    foobar := 11
+    assert foobar == 0
+}
+
+translates to 
+
+>>> Starting live variable analysis   [0.310668 s]
+after conversion to passive commands
+implementation bye()
+{
+    var foobar: int;
+    assume state(Heap, ZeroMask);
+    assume Heap == Heap;
+    assume ZeroMask == Mask;
+    assume state(Heap, ZeroMask);
+    assert {:msg "  Assert might fail. Assertion foobar == 0 might not hold. (insert.vpr@49.11--49.12) [1]"} 11 == 0;
+    assume state(Heap, ZeroMask);
+    return;
+}
+
+DONE: 4. We assume that inner values do not alias. 

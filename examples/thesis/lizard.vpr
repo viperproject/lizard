@@ -1,0 +1,31 @@
+function $state(g: Set[Ref]): Map[Ref, Ref]
+    requires NODES(g, 1/2)
+    ensures domain(result) == g
+    ensures forall u:Ref :: 
+        { u.next }
+        { result[u] }  // needs to be triggered when the field is modified
+            u in domain(result) ==> result[u] == u.next
+
+domain $Label {
+    function l0(): Map[Ref, Ref]
+    function l1(): Map[Ref, Ref]
+    function l2(): Map[Ref, Ref]
+    function l3(): Map[Ref, Ref]
+    function l4(): Map[Ref, Ref]
+    function l5(): Map[Ref, Ref]
+    function l6(): Map[Ref, Ref]
+    function l7(): Map[Ref, Ref]
+    function l8(): Map[Ref, Ref]
+    function l9(): Map[Ref, Ref]
+}
+
+define THIS_STATE_IS__l0 ($state(G) == l0())
+define THIS_STATE_IS__l1 ($state(G) == l1())
+define THIS_STATE_IS__l2 ($state(G) == l2())
+define THIS_STATE_IS__l3 ($state(G) == l3())
+define THIS_STATE_IS__l4 ($state(G) == l4())
+define THIS_STATE_IS__l5 ($state(G) == l5())
+define THIS_STATE_IS__l6 ($state(G) == l6())
+define THIS_STATE_IS__l7 ($state(G) == l7())
+define THIS_STATE_IS__l8 ($state(G) == l8())
+define THIS_STATE_IS__l9 ($state(G) == l9())

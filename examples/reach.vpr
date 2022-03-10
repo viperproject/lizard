@@ -1,0 +1,58 @@
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/TrCloDomain.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/skolems.vpr"
+import "/Users/wi/viper/viper_client/models/legoFraming2.0.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/macros.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/memspecs.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/unary/_preambles/memspecs.vpr"
+
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/common/graph.vpr"
+
+import "/Users/wi/Downloads/reachability-verification-master/_preambles/common/dag.vpr"
+import "/Users/wi/Downloads/reachability-verification-master/unary/_preambles/dag.vpr"
+
+
+define __CONVEXITY_CHECKES false
+
+define NO_SELF_EDGES(G)
+    (forall M:Ref :: { M.next } M in G ==> M != M.next)
+
+define TOTAL(G)
+    // (forall A:Ref, B:Ref :: {  }) && 
+    (forall A:Ref, B:Ref, C:Ref :: 
+        { P_(G, A, B), P_(G, A, C) } 
+            B != C && B in G && C in G && P_(G, A, B) && P_(G, A, C) ==> P_(G, B, C) && !P_(G, C, B) || !P_(G, B, C) && P_(G, C, B))
+
+define CALL($METHOD_NAME, G, H, arg, RES) {
+    if (true) {
+        var F: Set[Ref] := G setminus H
+        // assert ISCONVEX
+        EnableFocusOnConvexSubHeap(G, H)
+        EnableFocusOnFrame(H, G, F)
+        ApplyConvexTCFramingBefore(H, G, F)
+        label l1
+        RES := $METHOD_NAME(H, arg)
+        label l2
+        // assert ISCONVEX
+        EnableFocusOnConvexSubHeap(G, H)
+        EnableFocus(G, F)
+        ApplyConvexTCFramingAfter(l1, l2, H, G, F)
+    }
+}
+
+method find(G: Set[Ref], X: Ref) returns (I: Ref) 
+    requires DAG(G)
+    requires FUNCTIONAL(G) && UNSHARED(G) && TOTAL(G)
+    requires X in G
+    requires forall N:Ref :: { P_(G, X, N) } N in G ==> P_(G, X, N)
+{
+    assume X.next != null
+    var Y: Ref 
+    assume Y == X.next
+    // assert P_(G, X, X)
+    // assert P_(G, Y, Y)
+    // assert P_(G, X, Y)
+    // assert P_(G, X, X.next)
+    // assert 
+    assert !(X in G) //==> P_(G, Y, Y.next)
+    // assert P_(G, Y, X)
+}

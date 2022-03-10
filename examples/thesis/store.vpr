@@ -1,0 +1,95 @@
+// import "lizard2.vpr"
+function $state(g: Set[Ref]): Map[Ref, Ref]
+    requires NODES(g, 1/2)
+    ensures domain(result) == g
+    ensures forall u:Ref :: 
+        { u.next }
+        { result[u] }  // needs to be triggered when the field is modified
+            u in domain(result) ==> result[u] == u.next
+
+domain $Label {
+    function l0(): Map[Ref, Ref]
+    function l1(): Map[Ref, Ref]
+    function l2(): Map[Ref, Ref]
+    function l3(): Map[Ref, Ref]
+    function l4(): Map[Ref, Ref]
+    function l5(): Map[Ref, Ref]
+    function l6(): Map[Ref, Ref]
+    function l7(): Map[Ref, Ref]
+    function l8(): Map[Ref, Ref]
+    function l9(): Map[Ref, Ref]
+
+    function $local$a$0(): Int
+    function $local$a$1(): Int
+    function $local$a$2(): Int
+    function $local$a$3(): Int
+    function $local$a$4(): Int
+    function $local$a$5(): Int
+    function $local$a$6(): Int
+    function $local$a$7(): Int
+    function $local$a$8(): Int
+    function $local$a$9(): Int
+}
+
+define THIS_STATE_IS__l0(a) ($state(G) == l0() && a == $local$a$0())
+define THIS_STATE_IS__l1(a) ($state(G) == l1() && a == $local$a$1())
+define THIS_STATE_IS__l2(a) ($state(G) == l2() && a == $local$a$2())
+define THIS_STATE_IS__l3(a) ($state(G) == l3() && a == $local$a$3())
+define THIS_STATE_IS__l4(a) ($state(G) == l4() && a == $local$a$4())
+define THIS_STATE_IS__l5(a) ($state(G) == l5() && a == $local$a$5())
+define THIS_STATE_IS__l6 ($state(G) == l6())
+define THIS_STATE_IS__l7(a) ($state(G) == l7() && a == $local$a$7())
+define THIS_STATE_IS__l8(a) ($state(G) == l8() && a == $local$a$8())
+define THIS_STATE_IS__l9(a) ($state(G) == l9() && a == $local$a$9())
+
+field data: Int
+field next: Ref 
+
+define NODES(G, p)
+    !(null in G) && 
+    (forall QVAR_N: Ref :: 
+		{ QVAR_N.data }
+        { QVAR_N.next }
+			QVAR_N in G ==> acc(QVAR_N.data, p) && acc(QVAR_N.next, p))
+
+
+method Store(G: Set[Ref], hd: Ref, n: Ref) 
+    requires hd in G && n in G
+    requires NODES(G, write)
+    // requires hd != n  //-- missing assertion 
+
+    ensures NODES(G, write)
+    ensures THIS_STATE_IS__l6 ==> n.next == old(hd.next)
+{ 
+    var a: Int
+    assume THIS_STATE_IS__l0(a)
+
+    a := 22
+    assume THIS_STATE_IS__l1(a)
+
+    hd.data := 33
+
+    assume THIS_STATE_IS__l2(a)
+
+    n.next := hd.next
+    
+    assume THIS_STATE_IS__l3(a)
+
+    a := hd.data - a
+
+    assume THIS_STATE_IS__l4(a)
+    assume hd.next != n
+
+    hd.next := n
+
+    assume THIS_STATE_IS__l5(a)
+
+    // assert false
+}
+
+function equals(a:Ref, b:Ref): Bool {a==b}
+
+
+function sum(x: Int, y: Int): Int {
+    x + y
+}

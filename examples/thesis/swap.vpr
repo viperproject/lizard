@@ -1,0 +1,67 @@
+function $state(g: Set[Ref]): Map[Ref, Ref]
+    requires NODES(g, 1/2)
+    ensures domain(result) == g
+    ensures forall u:Ref :: 
+        { u.next }
+        { result[u] }
+        { result[u] }  // needs to be triggered when the field is modified
+            u in domain(result) ==> result[u] == u.next
+            
+
+domain $Label {
+    function l0(): Map[Ref, Ref]
+    function l1(): Map[Ref, Ref]
+    function l2(): Map[Ref, Ref]
+    function l3(): Map[Ref, Ref]
+    function l4(): Map[Ref, Ref]
+    function l5(): Map[Ref, Ref]
+    function l6(): Map[Ref, Ref]
+    function l7(): Map[Ref, Ref]
+    function l8(): Map[Ref, Ref]
+    function l9(): Map[Ref, Ref]
+
+    function $local$tmp$0(): Ref
+    function $local$tmp$1(): Ref
+    function $local$tmp$2(): Ref
+    function $local$tmp$3(): Ref
+    function $local$tmp$4(): Ref
+    function $local$tmp$5(): Ref
+    function $local$tmp$6(): Ref
+    function $local$tmp$7(): Ref
+    function $local$tmp$8(): Ref
+    function $local$tmp$9(): Ref
+}
+
+define THIS_STATE_IS__l0(a) ($state(G) == l0() && a == $local$tmp$0())
+define THIS_STATE_IS__l1(a) ($state(G) == l1() && a == $local$tmp$1())
+define THIS_STATE_IS__l2(a) ($state(G) == l2() && a == $local$tmp$2())
+define THIS_STATE_IS__l3    ($state(G) == l3())
+define THIS_STATE_IS__l4(a) ($state(G) == l4() && a == $local$tmp$3())
+define THIS_STATE_IS__l5(a) ($state(G) == l5() && a == $local$tmp$5())
+define THIS_STATE_IS__l6(a) ($state(G) == l6() && a == $local$tmp$6())
+define THIS_STATE_IS__l7(a) ($state(G) == l7() && a == $local$tmp$7())
+define THIS_STATE_IS__l8(a) ($state(G) == l8() && a == $local$tmp$8())
+define THIS_STATE_IS__l9(a) ($state(G) == l9() && a == $local$tmp$9())
+
+field data: Int
+field next: Ref 
+
+define NODES(G, p)
+    !(null in G) && 
+    (forall QVAR_N: Ref :: 
+		{ QVAR_N.data }
+        { QVAR_N.next }
+			QVAR_N in G ==> acc(QVAR_N.data, p) && acc(QVAR_N.next, p))
+
+method swap(G: Set[Ref], x: Ref, y: Ref)
+    requires NODES(G, write)
+    // requires forall n: Ref  :: { n.next } n in G ==> n.next in G
+    requires x in G && y in G && x != y //&& x.next == y
+
+    ensures NODES(G, write)
+    ensures THIS_STATE_IS__l3 ==> x.next == old(x.next)
+{
+    var tmp: Ref := x.next; assume THIS_STATE_IS__l0(tmp)
+    x.next := y.next;       assume THIS_STATE_IS__l1(tmp)
+    y.next := tmp;          assume THIS_STATE_IS__l2(tmp)
+}

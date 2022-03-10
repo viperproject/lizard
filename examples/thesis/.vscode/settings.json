@@ -1,0 +1,128 @@
+{
+    "viperSettings.preferences": {
+        "v": "674a514867b1",
+        "autoSave": true,
+        "logLevel": 5,
+        "autoVerifyAfterBackendChange": true,
+        "showProgress": true,
+        "enableSoundEffects": true,
+        "viperToolsProvider": {
+            "windows": "http://viper.ethz.ch/downloads/ViperToolsReleaseWin.zip",
+            "linux": "http://viper.ethz.ch/downloads/ViperToolsReleaseLinux.zip",
+            "mac": "http://viper.ethz.ch/downloads/ViperToolsReleaseMac.zip"
+        }
+    },
+    "viperSettings.javaSettings": {
+        "v": "674a514867b1",
+        "javaBinary": "/usr/bin/java",
+        "customArguments": "-Xmx2048m -Xss16m -cp $backendPaths$ -server $mainMethod$"
+    },
+    "viperSettings.viperServerSettings": {
+        "v": "674a514867b1",
+        "disableCaching": true
+    },
+    "viperSettings.verificationBackends": [
+        {
+            "v": "674a514867b1",
+            "name": "Carbon model.partial=true model.completion=false",
+            "type": "carbon",
+            "paths": [],
+            "engine": "ViperServer",
+            "timeout": 1000000,
+            "stages": [
+                {
+                    "name": "verify",
+                    "isVerification": true,
+                    "mainMethod": "viper.carbon.Carbon",
+                    "customArguments": "--z3Exe $z3Exe$ --boogieExe $boogieExe$ --boogieOpt \"/p:O:model.partial=true /p:O:model.completion=false /p:O:model.compact=true /p:O:model_validate=true\" $disableCaching$ --counterexample native $fileToVerify$"
+                }
+            ],
+            "stoppingTimeout": 5000
+        },
+        {
+            "v": "674a514867b1",
+            "name": "Carbon model.partial=true model.completion=true",
+            "type": "carbon",
+            "paths": [],
+            "engine": "ViperServer",
+            "timeout": 1000000,
+            "stages": [
+                {
+                    "name": "verify",
+                    "isVerification": true,
+                    "mainMethod": "viper.carbon.Carbon",
+                    "customArguments": "--z3Exe $z3Exe$ --boogieExe $boogieExe$ --boogieOpt \"/p:O:model.partial=true /p:O:model.completion=true /p:O:model.compact=true /p:O:model_validate=true\" $disableCaching$ --counterexample native $fileToVerify$"
+                }
+            ],
+            "stoppingTimeout": 5000
+        },
+        {
+            "v": "674a514867b1",
+            "name": "Carbon with /typeEncoding:p",
+            "type": "carbon",
+            "paths": [],
+            "engine": "ViperServer",
+            "timeout": 1000000,
+            "stages": [
+                {
+                    "name": "verify",
+                    "isVerification": true,
+                    "mainMethod": "viper.carbon.Carbon",
+                    "customArguments": "--z3Exe $z3Exe$ --boogieExe $boogieExe$ --boogieOpt /typeEncoding:p $disableCaching$ --counterexample native $fileToVerify$"
+                }
+            ],
+            "stoppingTimeout": 5000
+        },
+        {
+            "v": "674a514867b1",
+            "name": "Carbon with /typeEncoding:a",
+            "type": "carbon",
+            "paths": [],
+            "engine": "ViperServer",
+            "timeout": 1000000,
+            "stages": [
+                {
+                    "name": "verify",
+                    "isVerification": true,
+                    "mainMethod": "viper.carbon.Carbon",
+                    "customArguments": "--z3Exe $z3Exe$ --boogieExe $boogieExe$ --boogieOpt /typeEncoding:a $disableCaching$ --counterexample native $fileToVerify$"
+                }
+            ],
+            "stoppingTimeout": 5000
+        },
+        {
+            "v": "674a514867b1",
+            "name": "Silicon",
+            "type": "silicon",
+            "paths": [],
+            "engine": "ViperServer",
+            "timeout": 1000000,
+            "stages": [
+                {
+                    "name": "verify",
+                    "isVerification": true,
+                    "mainMethod": "viper.silicon.SiliconRunner",
+                    "customArguments": "--z3Exe $z3Exe$ $disableCaching$ --counterexample native $fileToVerify$"
+                }
+            ],
+            "stoppingTimeout": 5000
+        },
+        {
+            "v": "674a514867b1",
+            "name": "Silicon: model.partial=true",
+            "type": "silicon",
+            "paths": [],
+            "engine": "ViperServer",
+            "timeout": 1000000,
+            "stages": [
+                {
+                    "name": "verify",
+                    "isVerification": true,
+                    "mainMethod": "viper.silicon.SiliconRunner",
+                    "customArguments": "--z3ConfigArgs {model.partial=true} --z3Exe $z3Exe$ $disableCaching$ --counterexample native $fileToVerify$"
+                }
+            ],
+            "stoppingTimeout": 5000
+        }
+    ]
+}
