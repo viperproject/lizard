@@ -1,5 +1,5 @@
 # Lizard: the Viper debugger
-Lizard is a VS Code extension and an experimental visual debugger for the Viper intermediate verification language. It works with both Viper's backends (Silicon as well as Carbon), although not all Viper language features might work correctly. Hence, Lizard requires the [Viper VS Code extension](https://github.com/viperproject/viper-ide) to be installed (particularly, the `common-dbg` branch). Verification errors reported by Viper trigger Lizard to produce comprehensible counterexamples to failed assertions, postconditions, or invariants. 
+Lizard is a VS Code extension and an experimental visual debugger for the Viper intermediate verification language. It works with both Viper's backends (Silicon as well as Carbon), although not all Viper language features might work correctly. Hence, Lizard requires the [Viper VS Code extension](https://github.com/viperproject/viper-ide) to be installed (particularly, the `common-dbg` branch, see [PR #152](https://github.com/viperproject/viper-ide/pull/152)). Verification errors reported by Viper trigger Lizard to produce comprehensible counterexamples to failed assertions, postconditions, or invariants. 
 Lizard displays the counterexample _next to_ the Viper program that failed to verify. 
 
 # Core use case
