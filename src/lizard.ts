@@ -39,7 +39,7 @@ export namespace Lizard {
         Logger.debug(`Created namespace Lizard.`)
 
         viperApi.registerServerMessageCallback('backend_configuration', (messageType: string, message: any) => {
-            Logger.debug(`recieved message of type 'backend_configuration'`)
+            Logger.debug(`received message of type 'backend_configuration'`)
 
             lizardOpts.is_carbon = viperApi.getBackendName().toLowerCase().includes('carbon')
             if (lizardOpts.is_carbon) {
@@ -52,7 +52,7 @@ export namespace Lizard {
         })
         
         viperApi.registerServerMessageCallback('program_definitions', (messageType: string, message: any) => {
-            Logger.debug(`recieved message of type 'program_definitions'`)
+            Logger.debug(`received message of type 'program_definitions'`)
             
             programDefinitions = message.msg_body.definitions
             
@@ -188,7 +188,7 @@ export namespace Lizard {
         }
         
         viperApi.registerServerMessageCallback('verification_result', (messageType: string, message: any) => {
-            Logger.debug(`recieved message of type 'verification_result'`)
+            Logger.debug(`received message of type 'verification_result'`)
             let errors: Array<any> = message.msg_body.details.result.errors
             if (errors.length === 0) {
                 Logger.info(`message does not contain any verification errors; nothing to debug`)
