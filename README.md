@@ -24,7 +24,7 @@ To compile the project:
 # Dependencies
 To use Lizard, you first need to install the Viper extension for your Visual Studio Code installation. Viper is a JVM server application, so you'll also need Java. For more details, see [Download and Install Viper](http://viper.ethz.ch/downloads/).
 
-To activate the verification debugger, your preferred Viper backend must be set up to emit counterexamples. This can be doen by passing the ```--counterexample native``` option. For example, the JSON settings below configure two Viper backends ("silicon-debug" and "carbon-debug") to produce counterexamples (to switch between backends, use ```Ctrl+L``` or ```⌘+L```): 
+To activate the verification debugger, your preferred Viper backend must be set up to emit counterexamples. This can be done by passing the ```--counterexample native``` option. For example, the JSON settings below configure two Viper backends ("silicon-debug" and "carbon-debug") to produce counterexamples (to switch between backends, use ```Ctrl+L``` or ```⌘+L```): 
 ```json
 "viperSettings.verificationBackends": [
   {
