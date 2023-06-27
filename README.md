@@ -3,7 +3,7 @@ Lizard is a VS Code extension and an experimental visual debugger for the Viper 
 Lizard displays the counterexample _next to_ the Viper program that failed to verify. 
 
 # Core use case
-Lizard's main purpose is debugging (unbounded) heap-manipulating Viper programs that are specified in terms of quantifier permissions (a.k.a. iterated separating conjunction). Lizard is especially useful in combination with Chuckwalla (Viper's prototypical extension for heap-reachability verification). However, it may be that at this time Chuckwalla is not yet implemented. 
+Lizard's main purpose is debugging (unbounded) heap-manipulating Viper programs that are specified in terms of quantified permissions (a.k.a. iterated separating conjunction). Lizard is especially useful in combination with Chuckwalla (Viper's prototypical extension for heap-reachability verification). However, it may be that at this time Chuckwalla is not yet implemented. 
 
 # How it works
 To generate a counterexample, Lizard combines the available type information with the information from the SMT model (normally produced by Z3 in an incomplete yet incomprehensible manner). Visualization is further facilitated by some preexpectation for the _shape_ of possible counterexamples. For example, it is expected that each method's footprint is represented as a set of references to the nodes, the fields of which may be accessed by the method. 
@@ -64,6 +64,5 @@ To activate the verification debugger, your preferred Viper backend must be set 
 ]
 ```
 
-
 # Historical note
-This extension is a follow-up project to the family of verification debugger prototypes developed as student projects at the Programming Methodology Group at ETH Zurich. In particular, some code is borrowed from Alessio Aurrechia's Master thesis project (which used symbolic execution traces and Alloy models, as opposed to Z3 models, to extract possible counterexamples). 
+This extension is a follow-up project to the family of verification debugger prototypes developed as student projects at the Programming Methodology Group at ETH Zurich. In particular, some code is borrowed from Alessio Aurrechia's Master thesis project (which used symbolic execution traces and Alloy models, as opposed to Z3 models, to extract possible counterexamples).
